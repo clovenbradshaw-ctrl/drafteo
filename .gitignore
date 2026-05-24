@@ -1,4 +1,5 @@
 node_modules/
 dist/
+# docs/ is the GH Pages publish folder — kept tracked, not ignored.
 *.log
 .DS_Store
