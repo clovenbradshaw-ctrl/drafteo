@@ -49,8 +49,12 @@
   let route = { route: 'list' };
   function currentRoute() { return route; }
 
-  function start() {
+  async function start() {
     applyTheme(currentTheme());
+    // Wait for Matrix session restore + encrypted cache hydration before
+    // deciding which view to render. Otherwise we'd flash the login
+    // screen for users who already have a session.
+    try { if (window.Store && window.Store.ready) await window.Store.ready(); } catch (_) {}
     if (window.Store.session()) {
       app.openWorkspaceList();
     } else {

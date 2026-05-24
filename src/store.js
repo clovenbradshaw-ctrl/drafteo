@@ -16,130 +16,222 @@
 // is just a hydration cache and can always be rebuilt from the log.
 
 (function () {
-  const KEY = 'drafteo.v1';
+  // Persistence layer.
+  //
+  // Workspaces and documents have a real Matrix room as their identity —
+  // workspaces are encrypted m.space rooms, documents are encrypted rooms
+  // parented to that space. The room_id IS the workspace/document id.
+  //
+  // Everything else (sources, comments, suggestions, edit log, snapshots,
+  // boards, holons, exhibits, media) is mirrored in an in-memory cache
+  // that gets serialized as an AES-GCM ciphertext blob in localStorage.
+  // The key is derived from the Matrix access_token via PBKDF2-SHA256
+  // (200k iterations) with a per-install random salt. The access_token is
+  // never persisted in plaintext into the encrypted blob; it lives in the
+  // separate matrix-session entry under drafteo.matrix.session, which
+  // matrix-js-sdk also needs to rehydrate the client.
+  //
+  // Threat model:
+  //  - At rest on disk: ciphertext. Without the access_token, the blob
+  //    is uncrackable on commodity hardware.
+  //  - With the access_token: equivalent to Matrix itself — anyone with
+  //    the token can act as the user against the homeserver, so giving
+  //    them local cache too is the same security boundary.
+  //  - Future multi-user collab: documents are real encrypted rooms, so
+  //    Megolm-encrypted timeline events between members are the path
+  //    (Phase 2). The local cache becomes a sync mirror.
+
+  const KEY_ENC = 'drafteo.v1.enc';
+  const KEY_LEGACY = 'drafteo.v1';
+  const SALT_KEY = 'drafteo.cache.salt';
+
   function nowIso() { return new Date().toISOString(); }
 
   function blank() {
     return {
-      session: null,         // { matrix_id, display_name, homeserver, logged_in_at, device_id }
-      space_id: null,        // root Space room id
-      workspaces: {},        // ws_id -> Workspace
+      session: null,
+      space_id: null,
+      workspaces: {},
       workspace_order: [],
-      documents: {},         // doc_id -> Document (body cache)
-      doc_order: {},         // ws_id -> [doc_id]
-      sources: {},           // doc_id -> { source_id -> Source }
-      comments: {},          // doc_id -> { comment_id -> Comment }
-      suggestions: {},       // doc_id -> { suggestion_id -> Suggestion }
-      editlog: {},           // doc_id -> [EO event]  (newest first)
-      snapshots: {},         // doc_id -> { version -> body_markdown }   for scrubber preview
-      media: {},             // mxc -> { data_url, mime, filename }
+      documents: {},
+      doc_order: {},
+      sources: {},
+      comments: {},
+      suggestions: {},
+      editlog: {},
+      snapshots: {},
+      media: {},
     };
   }
 
-  function read() {
-    try {
-      const raw = localStorage.getItem(KEY);
-      if (!raw) return blank();
-      return Object.assign(blank(), JSON.parse(raw));
-    } catch (_) { return blank(); }
+  let state = blank();
+  let cryptoKey = null;
+  let bootDone = false;
+  const bootWaiters = [];
+
+  function b64enc(bytes) {
+    let s = '';
+    for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+    return btoa(s);
+  }
+  function b64dec(s) {
+    const bin = atob(s);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
   }
 
-  let state = read();
+  function getOrCreateSalt() {
+    try {
+      let s = localStorage.getItem(SALT_KEY);
+      if (s) return b64dec(s);
+    } catch (_) {}
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    try { localStorage.setItem(SALT_KEY, b64enc(salt)); } catch (_) {}
+    return salt;
+  }
 
-  function persist() {
-    try { localStorage.setItem(KEY, JSON.stringify(state)); }
+  async function deriveKey(accessToken) {
+    if (!accessToken || !crypto || !crypto.subtle) return null;
+    const salt = getOrCreateSalt();
+    const baseKey = await crypto.subtle.importKey(
+      'raw', new TextEncoder().encode(accessToken),
+      'PBKDF2', false, ['deriveKey']
+    );
+    return crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt, iterations: 200000, hash: 'SHA-256' },
+      baseKey,
+      { name: 'AES-GCM', length: 256 },
+      false, ['encrypt', 'decrypt']
+    );
+  }
+
+  async function encryptBlob(obj) {
+    if (!cryptoKey) return null;
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const data = new TextEncoder().encode(JSON.stringify(obj));
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, cryptoKey, data);
+    return b64enc(iv) + '.' + b64enc(new Uint8Array(ct));
+  }
+
+  async function decryptBlob(s) {
+    if (!cryptoKey || !s) return null;
+    const dot = s.indexOf('.');
+    if (dot < 0) return null;
+    try {
+      const iv = b64dec(s.slice(0, dot));
+      const ct = b64dec(s.slice(dot + 1));
+      const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, cryptoKey, ct);
+      return JSON.parse(new TextDecoder().decode(pt));
+    } catch (e) { return null; }
+  }
+
+  async function loadCache() {
+    let raw = null;
+    try { raw = localStorage.getItem(KEY_ENC); } catch (_) {}
+    if (!raw) {
+      // Migrate any pre-existing plaintext cache into the encrypted slot,
+      // then drop it.
+      try {
+        const legacy = localStorage.getItem(KEY_LEGACY);
+        if (legacy && cryptoKey) {
+          const obj = JSON.parse(legacy);
+          Object.assign(state, blank(), obj);
+          await flushNow();
+          localStorage.removeItem(KEY_LEGACY);
+          return;
+        }
+      } catch (_) {}
+      return;
+    }
+    const decoded = await decryptBlob(raw);
+    if (decoded) Object.assign(state, blank(), decoded);
+  }
+
+  let pendingFlush = null;
+  async function flushNow() {
+    if (!cryptoKey) return;
+    const blob = await encryptBlob(state);
+    if (!blob) return;
+    try { localStorage.setItem(KEY_ENC, blob); }
     catch (e) { console.warn('persist failed', e); }
   }
+  function persist() {
+    // Coalesce: schedule a single flush per microtask tick. Awaiting the
+    // returned promise is optional — most callers just fire-and-forget.
+    if (!cryptoKey) return Promise.resolve();
+    if (pendingFlush) return pendingFlush;
+    pendingFlush = Promise.resolve().then(async () => {
+      try { await flushNow(); } finally { pendingFlush = null; }
+    });
+    return pendingFlush;
+  }
+
+  // ---- Boot: rehydrate Matrix session and load the encrypted cache ----
+  async function bootstrap() {
+    try {
+      const sess = await (window.MX && window.MX.restoreSession ? window.MX.restoreSession() : null);
+      if (sess) {
+        state.session = sess;
+        cryptoKey = await deriveKey(sess.access_token);
+        await loadCache();
+      }
+    } catch (e) {
+      console.warn('Store bootstrap failed', e);
+    } finally {
+      bootDone = true;
+      while (bootWaiters.length) bootWaiters.shift()();
+    }
+  }
+  const bootPromise = bootstrap();
+  function ready() { return bootDone ? Promise.resolve() : new Promise((r) => bootWaiters.push(r)); }
 
   function latency(ms) { return new Promise(r => setTimeout(r, ms || 60 + Math.random() * 100)); }
   function uuid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
 
   // ============ SESSION ============
-  // Real Matrix password login. Hits the user's homeserver directly with
-  // POST /_matrix/client/v3/login. Throws the homeserver's error response
-  // verbatim if it rejects. No fake / mock — if the request fails, the user
-  // sees the error and stays on the login screen.
+  // Real Matrix password login through matrix-js-sdk. After login, the
+  // MatrixClient is up with Olm/Megolm crypto initialized and /sync
+  // running. The cache encryption key gets derived from the access_token
+  // immediately so that workspace/document mutations are persisted
+  // through ciphertext from the first write.
   async function login(user, pass, homeserver) {
     if (!user || !pass) throw new Error('Username and password required.');
-    let hs = (homeserver || '').trim();
-    if (!hs) throw new Error('Homeserver required (e.g. https://hyphae.social).');
-    if (!/^https?:\/\//.test(hs)) hs = 'https://' + hs;
-    hs = hs.replace(/\/+$/, '');
-
-    // Best-effort .well-known discovery (silent fallback to the user-supplied URL).
-    try {
-      const wk = await fetch(hs + '/.well-known/matrix/client', { headers: { Accept: 'application/json' } });
-      if (wk.ok) {
-        const j = await wk.json();
-        const base = j && j['m.homeserver'] && j['m.homeserver'].base_url;
-        if (base) hs = base.replace(/\/+$/, '');
-      }
-    } catch (_) {}
-
+    if (!homeserver || !String(homeserver).trim()) {
+      throw new Error('Homeserver required (e.g. https://hyphae.social).');
+    }
     const cleanedUser = user.replace(/^@/, '').split(':')[0];
-    const hsHost = hs.replace(/^https?:\/\//, '');
-    const body = {
-      type: 'm.login.password',
-      identifier: { type: 'm.id.user', user: cleanedUser },
-      password: pass,
-      initial_device_display_name: 'DraftEO',
-    };
-
-    let res, raw, j;
-    try {
-      res = await fetch(hs + '/_matrix/client/v3/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-    } catch (e) {
-      throw new Error('Could not reach ' + hsHost + ': ' + (e.message || e));
-    }
-    try { raw = await res.text(); j = JSON.parse(raw); } catch (_) {}
-
-    if (!res.ok || !j || !j.access_token) {
-      const code = j && j.errcode;
-      const msg = (j && (j.error || j.errcode)) || ('HTTP ' + res.status + (raw ? ' · ' + raw.slice(0, 200) : ''));
-      // Common, human-friendlier mappings.
-      if (code === 'M_FORBIDDEN') throw new Error('Wrong username or password.');
-      if (code === 'M_USER_DEACTIVATED') throw new Error('This account has been deactivated.');
-      if (code === 'M_LIMIT_EXCEEDED') throw new Error('Too many login attempts. Wait a minute and try again.');
-      throw new Error(msg);
-    }
-
-    state.session = {
-      matrix_id: j.user_id,
-      display_name: cleanedUser,
-      homeserver: hs,
-      device_id: j.device_id,
-      access_token: j.access_token,
-      logged_in_at: nowIso(),
-    };
-    persist();
+    const sess = await window.MX.loginWithPassword({
+      homeserver, username: cleanedUser, password: pass,
+    });
+    state.session = sess;
+    cryptoKey = await deriveKey(sess.access_token);
+    await loadCache();
+    await persist();
     return state.session;
   }
   function session() { return state.session; }
   async function logout() {
-    const sess = state.session;
     state.session = null;
-    persist();
-    if (sess && sess.access_token) {
-      try {
-        await fetch(sess.homeserver + '/_matrix/client/v3/logout', {
-          method: 'POST',
-          headers: { Authorization: 'Bearer ' + sess.access_token },
-        });
-      } catch (_) { /* best-effort; we've already cleared the local session */ }
-    }
+    cryptoKey = null;
+    try { localStorage.removeItem(KEY_ENC); } catch (_) {}
+    try { await window.MX.logout(); } catch (_) {}
+    // Wipe in-memory state so a fresh login starts blank.
+    Object.assign(state, blank());
   }
 
   // ============ WORKSPACES ============
+  // A workspace IS an encrypted Matrix Space. The room_id returned by
+  // createRoom becomes the workspace id — that way every consumer that
+  // already keys on `ws.id` keeps working, and Phase 2 multi-user only
+  // needs to start listening to room events.
   async function createWorkspace({ title, description }) {
-    await latency();
-    const id = 'ws_' + uuid();
+    if (!state.session) throw new Error('Not logged in');
     const me = state.session.matrix_id;
+    const id = await window.MX.createEncryptedSpace({ name: title, topic: description });
     state.workspaces[id] = {
       id,
+      matrix_room_id: id,
       title: (title || 'Untitled workspace').trim(),
       description: (description || '').trim(),
       e2ee: true,
@@ -150,21 +242,32 @@
     };
     state.workspace_order.unshift(id);
     state.doc_order[id] = [];
-    persist();
+    await persist();
     return state.workspaces[id];
   }
   async function updateWorkspace(id, patch) {
-    await latency();
     if (!state.workspaces[id]) throw new Error('No workspace');
     Object.assign(state.workspaces[id], patch, { updated_at: nowIso() });
-    persist();
+    // Best-effort: propagate name/topic changes to the Matrix room.
+    try {
+      const client = window.MX && window.MX.getClient && window.MX.getClient();
+      if (client) {
+        if (patch && typeof patch.title === 'string') {
+          await client.sendStateEvent(id, 'm.room.name', { name: patch.title }, '');
+        }
+        if (patch && typeof patch.description === 'string') {
+          await client.sendStateEvent(id, 'm.room.topic', { topic: patch.description }, '');
+        }
+      }
+    } catch (e) { console.warn('updateWorkspace room sync failed', e); }
+    await persist();
     return state.workspaces[id];
   }
   async function deleteWorkspace(id) {
-    await latency();
-    delete state.workspaces[id];
-    state.workspace_order = state.workspace_order.filter(x => x !== id);
+    try { await window.MX.leaveRoom(id); } catch (_) {}
+    // Also leave child document rooms.
     for (const d of (state.doc_order[id] || [])) {
+      try { await window.MX.leaveRoom(d); } catch (_) {}
       delete state.documents[d];
       delete state.sources[d];
       delete state.comments[d];
@@ -172,8 +275,10 @@
       delete state.editlog[d];
       delete state.snapshots[d];
     }
+    delete state.workspaces[id];
+    state.workspace_order = state.workspace_order.filter(x => x !== id);
     delete state.doc_order[id];
-    persist();
+    await persist();
   }
   function listWorkspaces() {
     return state.workspace_order.map(id => state.workspaces[id]).filter(Boolean);
@@ -182,15 +287,27 @@
 
   // ---- members / invites ----
   async function inviteMember(ws_id, matrix_id, role) {
-    await latency(140);
     const ws = state.workspaces[ws_id];
     if (!ws) throw new Error('No workspace');
     const cleaned = normalizeMatrixId(matrix_id);
     if (!cleaned) throw new Error('Enter a Matrix ID like @user:hyphae.social');
     if (ws.members.find(m => m.matrix_id === cleaned)) throw new Error('Already a member.');
+    // Real Matrix invite — homeserver will fail this if the user doesn't
+    // exist or the inviter lacks permission, and we surface that.
+    try { await window.MX.inviteUser(ws_id, cleaned); }
+    catch (e) {
+      const code = e && (e.errcode || (e.data && e.data.errcode));
+      if (code === 'M_FORBIDDEN') throw new Error('Not allowed to invite to this workspace.');
+      if (code === 'M_LIMIT_EXCEEDED') throw new Error('Too many invites. Wait a moment.');
+      throw new Error('Invite failed: ' + ((e && e.message) || code || 'unknown'));
+    }
+    // Also invite to every existing document room so they can read drafts.
+    for (const d of (state.doc_order[ws_id] || [])) {
+      try { await window.MX.inviteUser(d, cleaned); } catch (_) {}
+    }
     ws.members.push({ matrix_id: cleaned, role: role || 'editor', status: 'invited', invited_at: nowIso() });
     ws.updated_at = nowIso();
-    persist();
+    await persist();
     return ws;
   }
   async function updateMember(ws_id, matrix_id, patch) {
@@ -225,10 +342,24 @@
   }
 
   // ============ DOCUMENTS ============
+  // A document IS an encrypted Matrix room parented to the workspace
+  // Space. We invite every joined workspace member to the room so
+  // current members can read it via Megolm; future joiners get invited
+  // automatically by inviteMember.
   async function createDocument(ws_id, { title, dek }) {
-    await latency();
     if (!state.workspaces[ws_id]) throw new Error('No workspace');
-    const id = 'doc_' + uuid();
+    const ws = state.workspaces[ws_id];
+    const id = await window.MX.createEncryptedRoom({
+      name: title || 'Untitled draft',
+      topic: dek || undefined,
+      parentSpaceId: ws_id,
+    });
+    // Invite existing workspace members (best-effort).
+    for (const m of (ws.members || [])) {
+      if (m.matrix_id !== state.session.matrix_id) {
+        try { await window.MX.inviteUser(id, m.matrix_id); } catch (_) {}
+      }
+    }
     state.documents[id] = {
       id,
       workspace_id: ws_id,
@@ -279,6 +410,14 @@
       }, editEntry);
       state.editlog[doc_id] = state.editlog[doc_id] || [];
       state.editlog[doc_id].unshift(entry);
+      // Mirror to Matrix as an encrypted timeline event so other members
+      // see edits and the homeserver can never read them. Best-effort —
+      // local mirror is the source of truth until full sync replay lands.
+      try {
+        if (window.MX && window.MX.isReady && window.MX.isReady()) {
+          window.MX.sendEncrypted(doc_id, 'com.intelechia.drafteo.edit', entry).catch(() => {});
+        }
+      } catch (_) {}
     }
     persist();
     return next;
@@ -298,10 +437,10 @@
   }
 
   async function deleteDocument(doc_id) {
-    await latency();
     const d = state.documents[doc_id];
     if (!d) return;
     const ws = d.workspace_id;
+    try { await window.MX.leaveRoom(doc_id); } catch (_) {}
     delete state.documents[doc_id];
     delete state.sources[doc_id];
     delete state.comments[doc_id];
@@ -309,7 +448,7 @@
     delete state.editlog[doc_id];
     delete state.snapshots[doc_id];
     if (state.doc_order[ws]) state.doc_order[ws] = state.doc_order[ws].filter(x => x !== doc_id);
-    persist();
+    await persist();
   }
 
   function listDocuments(ws_id) {
@@ -856,7 +995,14 @@
     return (state.exhibits && state.exhibits[ws_id] && state.exhibits[ws_id][id]);
   }
 
-  function wipeAll() { state = blank(); persist(); }
+  async function wipeAll() {
+    Object.assign(state, blank());
+    cryptoKey = null;
+    try { localStorage.removeItem(KEY_ENC); } catch (_) {}
+    try { localStorage.removeItem(KEY_LEGACY); } catch (_) {}
+    try { localStorage.removeItem(SALT_KEY); } catch (_) {}
+    try { await window.MX.wipeAll(); } catch (_) {}
+  }
 
   // ============ EVIDENCE / CORKBOARD ============
   // Each workspace can have multiple named boards. Each board has its own
@@ -1069,6 +1215,7 @@
   }
 
   window.Store = {
+    ready,
     login, logout, session,
     createWorkspace, updateWorkspace, deleteWorkspace, listWorkspaces, getWorkspace,
     inviteMember, updateMember, removeMember, normalizeMatrixId,

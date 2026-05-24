@@ -8,7 +8,7 @@
   const { el, mount, clear, fmtTimeAgo } = window.DOM;
 
   function render(ws_id, focus_doc_id, app) {
-    const ws = Store.getWorkspace(ws_id);
+    let ws = Store.getWorkspace(ws_id);
     const session = Store.session();
     if (!ws) { app.openWorkspaceList(); return; }
 

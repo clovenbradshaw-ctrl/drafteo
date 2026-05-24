@@ -1,0 +1,371 @@
+// ============ MATRIX CLIENT ============
+// Thin wrapper around matrix-js-sdk that exposes a single shared
+// MatrixClient with crypto enabled (Olm/Megolm). Everything in Store
+// that hits the homeserver routes through here.
+//
+// Boot order:
+//   1. Olm WASM is loaded (matrix-bootstrap.js).
+//   2. On login or restore, we create a MatrixClient with the user's
+//      access_token + device_id + homeserver, call await initCrypto(),
+//      then await startClient() to begin /sync.
+//   3. The client lives on window.MX.client. Store mutators await
+//      window.MX.ready before touching it.
+//
+// "E2EE" means:
+//   - Rooms are created with m.room.encryption = m.megolm.v1.aes-sha2.
+//   - Timeline events (m.room.message, our edit log) get encrypted.
+//   - For data that conceptually wants to live in state events (sources,
+//     comments, snapshots, etc.) we publish them as encrypted timeline
+//     events with a stable logical id; the local index keeps the latest
+//     per id. Matrix state events are *not* encrypted, so we don't use
+//     them for sensitive content.
+
+import * as sdk from 'matrix-js-sdk';
+
+const SESSION_KEY = 'drafteo.matrix.session';
+
+const state = {
+  client: null,
+  ready: null,           // Promise that resolves once crypto+sync are up
+  status: 'idle',        // idle | logging-in | syncing | ready | error | stopped
+  syncedOnce: false,
+  listeners: new Set(),
+};
+
+function emit(ev) { for (const fn of state.listeners) { try { fn(ev); } catch (e) { console.error(e); } } }
+export function subscribe(fn) { state.listeners.add(fn); return () => state.listeners.delete(fn); }
+
+function readSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (_) { return null; }
+}
+function writeSession(s) {
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify(s)); } catch (_) {}
+}
+function clearSession() {
+  try { localStorage.removeItem(SESSION_KEY); } catch (_) {}
+}
+
+export function getClient() { return state.client; }
+export function getStatus() { return state.status; }
+export function getSession() { return readSession(); }
+export function isReady() { return state.status === 'ready'; }
+
+function normalizeHomeserver(hs) {
+  if (!hs) return null;
+  let s = String(hs).trim();
+  if (!s) return null;
+  if (!/^https?:\/\//.test(s)) s = 'https://' + s;
+  return s.replace(/\/+$/, '');
+}
+
+async function discoverHomeserver(hs) {
+  const base = normalizeHomeserver(hs);
+  if (!base) throw new Error('Homeserver required.');
+  try {
+    const r = await fetch(base + '/.well-known/matrix/client');
+    if (r.ok) {
+      const j = await r.json();
+      const wk = j && j['m.homeserver'] && j['m.homeserver'].base_url;
+      if (wk) return normalizeHomeserver(wk);
+    }
+  } catch (_) {}
+  return base;
+}
+
+async function buildClient(session) {
+  // Ensure Olm is initialized (idempotent).
+  if (globalThis.Olm && typeof globalThis.Olm.init === 'function') {
+    try {
+      await globalThis.Olm.init({
+        locateFile: () => globalThis.__olmWasmUrl,
+      });
+    } catch (e) {
+      // Already initialized, or wasm load issue — let initCrypto surface it.
+    }
+  }
+
+  // Persist session + crypto state in IndexedDB so reloads don't have to
+  // re-download history or regenerate Olm device keys (which would break
+  // decryption of prior Megolm sessions).
+  const idb = globalThis.indexedDB;
+  let store, cryptoStore;
+  if (idb) {
+    try {
+      store = new sdk.IndexedDBStore({ indexedDB: idb, dbName: 'drafteo-store' });
+      await store.startup();
+      cryptoStore = new sdk.IndexedDBCryptoStore(idb, 'drafteo-crypto');
+    } catch (e) {
+      console.warn('IndexedDB store init failed, falling back to memory', e);
+      store = undefined;
+      cryptoStore = undefined;
+    }
+  }
+
+  const client = sdk.createClient({
+    baseUrl: session.homeserver,
+    accessToken: session.access_token,
+    userId: session.matrix_id,
+    deviceId: session.device_id,
+    timelineSupport: true,
+    store,
+    cryptoStore,
+  });
+
+  // Initialize legacy crypto (Olm/Megolm). The Rust crypto path requires
+  // an IndexedDB-backed store and a few more boot steps; legacy is good
+  // enough for "actually E2EE" without that complexity today.
+  if (typeof client.initCrypto === 'function') {
+    await client.initCrypto();
+  } else if (typeof client.initRustCrypto === 'function') {
+    await client.initRustCrypto();
+  }
+
+  // Trust all devices by default so first messages aren't blocked by
+  // unverified-device errors. The honest tradeoff: this lets MITM-via-
+  // compromised-homeserver inject devices. Real verification UI is a
+  // follow-up (Phase 3 in the rewrite plan).
+  if (client.setGlobalErrorOnUnknownDevices) client.setGlobalErrorOnUnknownDevices(false);
+
+  return client;
+}
+
+async function startSync(client) {
+  return new Promise((resolve, reject) => {
+    const onSync = (s) => {
+      if (s === 'PREPARED' || s === 'SYNCING') {
+        state.syncedOnce = true;
+        client.off('sync', onSync);
+        resolve();
+      } else if (s === 'ERROR') {
+        // Don't reject — sync may recover. Log and let caller decide.
+        console.warn('Matrix sync ERROR (continuing)');
+      }
+    };
+    client.on('sync', onSync);
+    client.startClient({ initialSyncLimit: 20 }).catch(reject);
+  });
+}
+
+export async function loginWithPassword({ homeserver, username, password }) {
+  if (!username || !password) throw new Error('Username and password required.');
+  if (!homeserver) throw new Error('Homeserver required.');
+  state.status = 'logging-in';
+  emit({ type: 'status', status: state.status });
+
+  const baseUrl = await discoverHomeserver(homeserver);
+
+  // Use a temporary client to perform login so we get device_id + token.
+  const tmp = sdk.createClient({ baseUrl });
+  let resp;
+  try {
+    resp = await tmp.loginWithPassword(username, password);
+  } catch (e) {
+    state.status = 'error';
+    emit({ type: 'status', status: state.status, error: e });
+    const code = e && (e.errcode || e.data && e.data.errcode);
+    if (code === 'M_FORBIDDEN') throw new Error('Wrong username or password.');
+    if (code === 'M_USER_DEACTIVATED') throw new Error('This account has been deactivated.');
+    if (code === 'M_LIMIT_EXCEEDED') throw new Error('Too many login attempts. Wait a minute and try again.');
+    throw new Error((e && e.message) || 'Login failed.');
+  }
+
+  const session = {
+    matrix_id: resp.user_id,
+    display_name: username,
+    homeserver: baseUrl,
+    device_id: resp.device_id,
+    access_token: resp.access_token,
+    logged_in_at: new Date().toISOString(),
+  };
+  writeSession(session);
+
+  await bringUpClient(session);
+  return session;
+}
+
+async function bringUpClient(session) {
+  state.status = 'syncing';
+  emit({ type: 'status', status: state.status });
+  const client = await buildClient(session);
+  state.client = client;
+  state.ready = startSync(client).then(() => {
+    state.status = 'ready';
+    emit({ type: 'status', status: state.status });
+    emit({ type: 'ready' });
+  }).catch((e) => {
+    state.status = 'error';
+    emit({ type: 'status', status: state.status, error: e });
+    throw e;
+  });
+  await state.ready;
+  return client;
+}
+
+export async function restoreSession() {
+  const s = readSession();
+  if (!s || !s.access_token) return null;
+  try { await bringUpClient(s); return s; }
+  catch (e) {
+    console.warn('Matrix restore failed', e);
+    state.status = 'error';
+    return null;
+  }
+}
+
+export async function logout() {
+  if (state.client) {
+    try { await state.client.logout(true); } catch (_) {}
+    try { state.client.stopClient(); } catch (_) {}
+    // Wipe IndexedDB crypto + sync stores so the next user on this
+    // browser doesn't inherit our device keys / Megolm sessions.
+    try { await state.client.clearStores(); } catch (_) {}
+  }
+  state.client = null;
+  state.ready = null;
+  state.status = 'stopped';
+  clearSession();
+  emit({ type: 'status', status: state.status });
+}
+
+export async function wipeAll() {
+  await logout();
+  try {
+    for (const k of Object.keys(localStorage)) {
+      if (k.startsWith('drafteo.')) localStorage.removeItem(k);
+    }
+  } catch (_) {}
+}
+
+// Ensure a room has encryption enabled. Idempotent — checks existing state.
+export async function ensureEncryption(client, roomId) {
+  try {
+    const enc = client.getRoom(roomId)?.currentState?.getStateEvents('m.room.encryption', '');
+    if (enc) return;
+    await client.sendStateEvent(roomId, 'm.room.encryption', { algorithm: 'm.megolm.v1.aes-sha2' }, '');
+  } catch (e) {
+    console.warn('ensureEncryption failed', e);
+  }
+}
+
+export async function createEncryptedSpace({ name, topic }) {
+  const client = state.client;
+  if (!client) throw new Error('Matrix client not ready.');
+  const r = await client.createRoom({
+    name: name || 'Untitled workspace',
+    topic: topic || undefined,
+    preset: 'private_chat',
+    visibility: 'private',
+    creation_content: { type: 'm.space' },
+    initial_state: [
+      { type: 'm.room.encryption', state_key: '', content: { algorithm: 'm.megolm.v1.aes-sha2' } },
+      { type: 'm.room.guest_access', state_key: '', content: { guest_access: 'forbidden' } },
+      { type: 'm.room.history_visibility', state_key: '', content: { history_visibility: 'invited' } },
+    ],
+  });
+  return r.room_id;
+}
+
+export async function createEncryptedRoom({ name, topic, parentSpaceId }) {
+  const client = state.client;
+  if (!client) throw new Error('Matrix client not ready.');
+  const initial_state = [
+    { type: 'm.room.encryption', state_key: '', content: { algorithm: 'm.megolm.v1.aes-sha2' } },
+    { type: 'm.room.guest_access', state_key: '', content: { guest_access: 'forbidden' } },
+    { type: 'm.room.history_visibility', state_key: '', content: { history_visibility: 'invited' } },
+  ];
+  if (parentSpaceId) {
+    initial_state.push({
+      type: 'm.space.parent',
+      state_key: parentSpaceId,
+      content: { canonical: true, via: [parentSpaceId.split(':').pop()] },
+    });
+  }
+  const r = await client.createRoom({
+    name: name || 'Untitled document',
+    topic: topic || undefined,
+    preset: 'private_chat',
+    visibility: 'private',
+    initial_state,
+  });
+  // Add the child to the space (best-effort).
+  if (parentSpaceId) {
+    try {
+      const via = [parentSpaceId.split(':').pop()];
+      await client.sendStateEvent(parentSpaceId, 'm.space.child', { via, suggested: false }, r.room_id);
+    } catch (e) { console.warn('space.child failed', e); }
+  }
+  return r.room_id;
+}
+
+// Send an encrypted timeline event with our custom type.
+export async function sendEncrypted(roomId, type, content) {
+  const client = state.client;
+  if (!client) throw new Error('Matrix client not ready.');
+  return client.sendEvent(roomId, type, content);
+}
+
+// Read all timeline events of a given type from a room. Uses the live
+// timeline that's accumulated via sync; doesn't paginate backwards yet.
+export function readTimeline(roomId, type) {
+  const client = state.client;
+  if (!client) return [];
+  const room = client.getRoom(roomId);
+  if (!room) return [];
+  const out = [];
+  const tl = room.getLiveTimeline().getEvents();
+  for (const ev of tl) {
+    if (ev.getType() === type && !ev.isRedacted()) out.push(ev);
+  }
+  return out;
+}
+
+// List joined Spaces (workspaces).
+export function listJoinedSpaces() {
+  const client = state.client;
+  if (!client) return [];
+  return client.getRooms().filter((r) => {
+    const create = r.currentState.getStateEvents('m.room.create', '');
+    return create && create.getContent().type === 'm.space' && r.getMyMembership() === 'join';
+  });
+}
+
+// List rooms that are children of a given space.
+export function listSpaceChildren(spaceId) {
+  const client = state.client;
+  if (!client) return [];
+  const space = client.getRoom(spaceId);
+  if (!space) return [];
+  const children = space.currentState.getStateEvents('m.space.child');
+  const out = [];
+  for (const ev of children) {
+    const child = client.getRoom(ev.getStateKey());
+    if (child && child.getMyMembership() === 'join') out.push(child);
+  }
+  return out;
+}
+
+// Convenience: invite a Matrix ID to a room.
+export async function inviteUser(roomId, mxid) {
+  const client = state.client;
+  if (!client) throw new Error('Matrix client not ready.');
+  return client.invite(roomId, mxid);
+}
+
+// Convenience: leave/forget a room.
+export async function leaveRoom(roomId) {
+  const client = state.client;
+  if (!client) throw new Error('Matrix client not ready.');
+  try { await client.leave(roomId); } catch (_) {}
+  try { await client.forget(roomId); } catch (_) {}
+}
+
+window.MX = {
+  loginWithPassword, restoreSession, logout, wipeAll,
+  getClient, getStatus, getSession, isReady, subscribe,
+  createEncryptedSpace, createEncryptedRoom, sendEncrypted, readTimeline,
+  listJoinedSpaces, listSpaceChildren,
+  inviteUser, leaveRoom, ensureEncryption,
+};
