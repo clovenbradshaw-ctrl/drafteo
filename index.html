@@ -1,1 +1,51 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DraftEO</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Courier+Prime:ital,wght@0,400;0,700;1,400&family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,400;1,9..144,500&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css" />
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css" />
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css" />
+<link rel="stylesheet" href="styles.css" />
+<link rel="stylesheet" href="theme.css" />
+<link rel="stylesheet" href="editor.css" />
+<link rel="stylesheet" href="corkboard.css" />
+<link rel="stylesheet" href="srcviewer.css" />
+</head>
+<body>
+<div id="root"></div>
 
+<script>
+// Apply persisted theme synchronously, before any render, to avoid flash
+(function () {
+  try {
+    var t = localStorage.getItem('drafteo.theme');
+    if (!t || (t !== 'light' && t !== 'dark')) {
+      t = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+    }
+    document.documentElement.dataset.theme = t;
+  } catch (_) {}
+})();
+</script>
+
+<script src="src/store.js"></script>
+<script src="src/eo.js"></script>
+<script src="src/markdown.js"></script>
+<script src="src/dom.js"></script>
+<script src="src/login.js"></script>
+<script src="src/projects.js"></script>
+<script src="src/sources.js"></script>
+<script src="src/history.js"></script>
+<script src="src/exporter.js"></script>
+<script src="src/corkboard.js"></script>
+<script src="src/search.js"></script>
+<script src="src/srcviewer.js"></script>
+<script src="src/editor.js"></script>
+<script src="src/workspace.js"></script>
+<script src="src/app.js"></script>
+</body>
+</html>
