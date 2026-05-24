@@ -219,6 +219,9 @@ export async function logout() {
   if (state.client) {
     try { await state.client.logout(true); } catch (_) {}
     try { state.client.stopClient(); } catch (_) {}
+    // Wipe IndexedDB crypto + sync stores so the next user on this
+    // browser doesn't inherit our device keys / Megolm sessions.
+    try { await state.client.clearStores(); } catch (_) {}
   }
   state.client = null;
   state.ready = null;
