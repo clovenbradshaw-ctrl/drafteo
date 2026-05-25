@@ -391,14 +391,29 @@ export const Store = {
   },
 
   /**
-   * URL for a citation footnote. Phase 3 wires the real archive.org URL;
-   * for now we hand back whatever URL is on the source (if any) or null.
+   * URL for a citation footnote. Archived sources point readers at the
+   * DraftEO mini-viewer (renders the archived file with the cited span
+   * highlighted). Falls back to the source's original URL, then a
+   * pending-archive placeholder.
    */
   buildCitationUrl(source, footnote) {
-    void footnote;
-    if (!source) return null;
-    return source.archive_org_url || source.url || null;
+    if (!source) return '';
+    if (source.archive_org_identifier) {
+      const params = new URLSearchParams();
+      params.set('src', source.archive_org_identifier);
+      if (source.filename) params.set('file', source.filename);
+      if (source.mime) params.set('type', _mimeKind(source.mime));
+      if (footnote && footnote.page) params.set('page', footnote.page);
+      if (footnote && footnote.supporting_quote) params.set('q', footnote.supporting_quote);
+      if (footnote && footnote.note) params.set('note', footnote.note);
+      return Store.VIEWER_BASE + '#' + params.toString().replace(/%20/g, '+');
+    }
+    if (source.archive_org_url) return source.archive_org_url;
+    if (source.source_url) return source.source_url;
+    return '#pending-archive';
   },
+
+  VIEWER_BASE: 'https://clovenbradshaw-ctrl.github.io/drafteo/view.html',
 
   async deleteDocument(doc_id) {
     const client = getClient();
@@ -843,16 +858,113 @@ export const Store = {
     return results;
   },
 
-  // Comments + suggestions (Phase 5). Editor renders empty panels with
-  // these returning []; mutators announce when they're touched so we
-  // surface misuse early.
-  listComments(doc_id) { void doc_id; return []; },
-  listSuggestions(doc_id) { void doc_id; return []; },
-  async createComment()    { throw new Error('Comments arrive in Phase 5'); },
-  async replyComment()     { throw new Error('Comments arrive in Phase 5'); },
-  async resolveComment()   { throw new Error('Comments arrive in Phase 5'); },
-  async createSuggestion() { throw new Error('Suggestions arrive in Phase 5'); },
-  async updateSuggestion() { throw new Error('Suggestions arrive in Phase 5'); },
+  // ── Comments (Phase 5) ──
+  // Each comment is INS(comment, {anchor_id, quote, body, author, ts}).
+  // Replies are INS(comment_reply, {parent: comment_anchor, body, author,
+  // ts}) so a thread can grow without rewriting the whole array via DEF.
+
+  async createComment(doc_id, { anchor_id, quote, body }) {
+    const session = await ensureDocumentSession(doc_id);
+    void session;
+    const me = currentSession?.matrix_id || null;
+    return ins(doc_id, 'comment', {
+      anchor_id: anchor_id || null,
+      quote: quote || '',
+      body: body || '',
+      author: me,
+      ts: Date.now(),
+      resolved: false,
+      deleted: false,
+    });
+  },
+  async replyComment(doc_id, comment_id, body) {
+    const session = await ensureDocumentSession(doc_id);
+    void session;
+    const me = currentSession?.matrix_id || null;
+    return ins(doc_id, 'comment_reply', {
+      parent: comment_id,
+      body: body || '',
+      author: me,
+      ts: Date.now(),
+    });
+  },
+  async resolveComment(doc_id, comment_id, resolved) {
+    await def(doc_id, comment_id, 'resolved', !!resolved);
+  },
+  listComments(doc_id) {
+    const session = documentSessions.get(doc_id);
+    if (!session) return [];
+    const comments = entitiesOfType(session.state, 'comment')
+      .filter((c) => !c.deleted);
+    const replies = entitiesOfType(session.state, 'comment_reply');
+    const repliesByParent = {};
+    for (const r of replies) {
+      if (!r.parent) continue;
+      (repliesByParent[r.parent] = repliesByParent[r.parent] || []).push({
+        author: r.author || r._sender || null,
+        body: r.body || '',
+        ts: r.ts || r._created || 0,
+      });
+    }
+    return comments
+      .map((c) => {
+        const thread = [
+          { author: c.author || c._sender || null, body: c.body || '', ts: c.ts || c._created || 0 },
+          ...(repliesByParent[c._anchor] || []).sort((a, b) => a.ts - b.ts),
+        ];
+        return {
+          id: c._anchor,
+          anchor_id: c.anchor_id || null,
+          quote: c.quote || '',
+          thread,
+          resolved: !!c.resolved,
+          created_at: c._created || 0,
+        };
+      })
+      .sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
+  },
+
+  // ── Suggestions (tracked-change proposals) ──
+
+  async createSuggestion(doc_id, { anchor_id, original, proposed, note }) {
+    const session = await ensureDocumentSession(doc_id);
+    void session;
+    const me = currentSession?.matrix_id || null;
+    return ins(doc_id, 'suggestion', {
+      anchor_id: anchor_id || null,
+      original: original || '',
+      proposed: proposed || '',
+      note: note || '',
+      author: me,
+      status: 'pending',
+      created_at: Date.now(),
+      deleted: false,
+    });
+  },
+  async updateSuggestion(doc_id, sug_id, patch) {
+    const allowed = ['status', 'note', 'proposed'];
+    for (const k of Object.keys(patch || {})) {
+      if (!allowed.includes(k)) continue;
+      await def(doc_id, sug_id, k, patch[k]);
+    }
+  },
+  listSuggestions(doc_id) {
+    const session = documentSessions.get(doc_id);
+    if (!session) return [];
+    return entitiesOfType(session.state, 'suggestion')
+      .filter((s) => !s.deleted)
+      .map((s) => ({
+        id: s._anchor,
+        anchor_id: s.anchor_id || null,
+        original: s.original || '',
+        proposed: s.proposed || '',
+        note: s.note || '',
+        author: s.author || s._sender || null,
+        status: s.status || 'pending',
+        created_at: s.created_at || s._created || 0,
+      }))
+      .sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
+  },
 
   // ── Misc ──
 
@@ -950,6 +1062,18 @@ function evidenceCard(e) {
     created_at: e.created_at || e._created || 0,
     author: e.author || null,
   };
+}
+
+// Citation viewer's mime kind classification (matches the old shape).
+function _mimeKind(mime) {
+  if (!mime) return 'other';
+  if (mime === 'application/pdf') return 'pdf';
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('audio/')) return 'audio';
+  if (mime.startsWith('video/')) return 'video';
+  if (mime === 'text/html') return 'html';
+  if (mime.startsWith('text/') || mime.includes('csv')) return 'text';
+  return 'other';
 }
 
 // Subsequence match used by the workspace-wide source search.
