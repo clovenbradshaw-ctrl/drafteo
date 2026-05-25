@@ -33,6 +33,7 @@ import {
   setRecoveryKeyProvider,
 } from './client.js';
 import { setNamespace, getNamespace, ins, def, eva } from './operators.js';
+import { encryptAttachment, decryptAttachment } from 'matrix-encrypt-attachment';
 import { initial, fold, foldFrom, entitiesOfType } from './fold.js';
 import {
   createRoom, discoverRooms, getMembers, invite as inviteUser,
@@ -407,26 +408,217 @@ export const Store = {
     if (s) { try { await s.close(); } catch {} documentSessions.delete(doc_id); }
   },
 
-  // ── Stubs for Phase 2/3 ──
-  // The UI calls these but until later phases they're either reads-of-nothing
-  // or no-ops. Keep them present so workspace.js / projects.js don't crash.
+  // ── Sources (Phase 3) ──
 
   listSources(doc_id) {
-    void doc_id; return [];
+    const session = documentSessions.get(doc_id);
+    if (!session) return [];
+    return entitiesOfType(session.state, ENTITY.SOURCE)
+      .filter((e) => !e.deleted && !e.hidden)
+      .map(sourceCard)
+      .sort((a, b) => (a.uploaded_at || 0) - (b.uploaded_at || 0));
   },
-  getSource(doc_id, source_id) {
-    void doc_id; void source_id; return null;
-  },
-  async uploadSource() { throw new Error('Sources will be wired in Phase 3'); },
-  async updateSource()  { throw new Error('Sources will be wired in Phase 3'); },
-  async hideSource()    { throw new Error('Sources will be wired in Phase 3'); },
-  async deleteSource()  { throw new Error('Sources will be wired in Phase 3'); },
-  async importFromUrl() { throw new Error('Sources will be wired in Phase 3'); },
-  async archiveSource() { throw new Error('Sources will be wired in Phase 3'); },
 
-  listExhibits(ws_id) { void ws_id; return []; },
-  async updateExhibit() { throw new Error('Exhibits will be wired in Phase 4'); },
-  async deleteExhibit() { throw new Error('Exhibits will be wired in Phase 4'); },
+  listHiddenSources(doc_id) {
+    const session = documentSessions.get(doc_id);
+    if (!session) return [];
+    return entitiesOfType(session.state, ENTITY.SOURCE)
+      .filter((e) => !e.deleted && e.hidden)
+      .map(sourceCard)
+      .sort((a, b) => (b.uploaded_at || 0) - (a.uploaded_at || 0));
+  },
+
+  getSource(doc_id, source_id) {
+    const session = documentSessions.get(doc_id);
+    if (!session) return null;
+    const e = session.state.entities[source_id];
+    if (!e || e._type !== ENTITY.SOURCE) return null;
+    if (e.deleted) return null;
+    return sourceCard(e);
+  },
+
+  /**
+   * Encrypt the file client-side, upload the ciphertext to the homeserver
+   * media repo, and INS a source entity into the document room carrying
+   * the mxc URL alongside the encryption descriptor. The plaintext never
+   * leaves the client.
+   */
+  async uploadSource(doc_id, file, patch) {
+    const session = await ensureDocumentSession(doc_id);
+    void session;
+    const client = getClient();
+    if (!client) throw new Error('Not connected');
+
+    const plaintext = await file.arrayBuffer();
+    const { data: ciphertext, info } = await encryptAttachment(plaintext);
+    const blob = new Blob([ciphertext], { type: 'application/octet-stream' });
+    const resp = await client.uploadContent(blob, {
+      name: file.name,
+      type: 'application/octet-stream',
+    });
+    const mxc = typeof resp === 'string' ? resp : (resp.content_uri || resp);
+
+    const payload = {
+      title: (patch?.title || file.name || 'Untitled').trim(),
+      filename: file.name,
+      mime: file.type || 'application/octet-stream',
+      size_bytes: file.size,
+      uploaded_at: Date.now(),
+      mxc_uri: mxc,
+      encryption_info: info,
+      source_url: null,
+      description: patch?.description || '',
+      tags: Array.isArray(patch?.tags) ? patch.tags : [],
+      hidden: false,
+      deleted: false,
+    };
+    const anchor = await ins(doc_id, ENTITY.SOURCE, payload);
+    return Store.getSource(doc_id, anchor) || { source_id: anchor, ...payload };
+  },
+
+  /** URL-only source — no media upload. */
+  async importFromUrl(doc_id, url) {
+    if (!url) throw new Error('URL required');
+    const session = await ensureDocumentSession(doc_id);
+    void session;
+    const trimmed = String(url).trim();
+    const payload = {
+      title: trimmed,
+      filename: trimmed.replace(/^https?:\/\//, '').slice(0, 80),
+      mime: 'text/html',
+      size_bytes: 0,
+      uploaded_at: Date.now(),
+      mxc_uri: null,
+      encryption_info: null,
+      source_url: trimmed,
+      description: '',
+      tags: [],
+      hidden: false,
+      deleted: false,
+    };
+    const anchor = await ins(doc_id, ENTITY.SOURCE, payload);
+    return Store.getSource(doc_id, anchor) || { source_id: anchor, ...payload };
+  },
+
+  async updateSource(doc_id, source_id, patch) {
+    const allowed = ['title', 'description', 'tags', 'archive_org_url',
+                     'archived_at', 'archive_org_identifier',
+                     'archive_org_filename'];
+    for (const k of Object.keys(patch || {})) {
+      if (!allowed.includes(k)) continue;
+      await def(doc_id, source_id, k, patch[k]);
+    }
+    return Store.getSource(doc_id, source_id);
+  },
+
+  async hideSource(doc_id, source_id, hidden) {
+    await def(doc_id, source_id, 'hidden', !!hidden);
+    return Store.getSource(doc_id, source_id);
+  },
+
+  /** Permanent delete (tombstone via DEF). Citations to it go orphaned. */
+  async deleteSource(doc_id, source_id) {
+    await def(doc_id, source_id, 'deleted', true);
+  },
+
+  /**
+   * Archive flow: opens the Wayback Machine save endpoint in a new tab,
+   * then prompts for the resulting archive URL. Wayback's CORS policy
+   * blocks programmatic reads of the save response from a browser, so
+   * the user pastes the URL back when the save finishes.
+   */
+  async archiveSource(doc_id, source_id, onProgress) {
+    const s = Store.getSource(doc_id, source_id);
+    if (!s) throw new Error('source not found');
+    const target = s.source_url || (s.mxc_uri ? null : null);
+    if (!target) {
+      // No URL to archive. The file is already preserved on the homeserver
+      // and encrypted; for now we surface this as an error so the caller
+      // knows. Phase 6 may pipe file→Wayback via a server proxy.
+      throw new Error('archive.org only accepts URL sources for now');
+    }
+    onProgress && onProgress('opening Wayback Machine…');
+    const saveUrl = `https://web.archive.org/save/${encodeURI(target)}`;
+    try { window.open(saveUrl, '_blank', 'noopener'); } catch (_) {}
+    const archived = (typeof prompt === 'function') ? prompt(
+      'After the Wayback Machine finishes saving, copy the resulting URL\n' +
+      '(it starts with https://web.archive.org/web/) and paste it here:',
+      ''
+    ) : null;
+    if (!archived) {
+      onProgress && onProgress('cancelled');
+      return Store.getSource(doc_id, source_id);
+    }
+    onProgress && onProgress('recording archive…');
+    await Store.updateSource(doc_id, source_id, {
+      archive_org_url: archived.trim(),
+      archived_at: Date.now(),
+    });
+    onProgress && onProgress('done');
+    return Store.getSource(doc_id, source_id);
+  },
+
+  /**
+   * Legacy API: returned cached base64. The new foundation doesn't cache
+   * inline — it fetches + decrypts on demand. Callers should use
+   * fetchMedia() (async) instead. Keeping this sync stub so old code
+   * paths that read `Store.getMedia(...)` don't crash; returns null.
+   */
+  getMedia(_mxc_uri) { return null; },
+
+  /**
+   * Fetch the ciphertext from the media repo, decrypt with the source's
+   * encryption_info, return a blob URL. Caller is responsible for
+   * URL.revokeObjectURL when done. URL-only sources return null.
+   */
+  async fetchMedia(source) {
+    if (!source || !source.mxc_uri) return null;
+    const client = getClient();
+    if (!client) return null;
+    const httpUrl = client.mxcUrlToHttp(source.mxc_uri);
+    if (!httpUrl) return null;
+    const resp = await fetch(httpUrl);
+    if (!resp.ok) throw new Error('media fetch failed: HTTP ' + resp.status);
+    const buf = await resp.arrayBuffer();
+    let plaintext = buf;
+    if (source.encryption_info) {
+      plaintext = await decryptAttachment(buf, source.encryption_info);
+    }
+    const blob = new Blob([plaintext], { type: source.mime || 'application/octet-stream' });
+    return URL.createObjectURL(blob);
+  },
+
+  // Exhibits (Phase 4 lists+edits; Phase 3 only creates from srcviewer)
+  listExhibits(ws_id) {
+    const session = workspaceSessions.get(ws_id);
+    if (!session) return [];
+    return entitiesOfType(session.state, ENTITY.EXHIBIT)
+      .filter((e) => !e.deleted)
+      .map(exhibitCard)
+      .sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+  },
+  async createExhibit(ws_id, payload) {
+    ensureWorkspaceSession(ws_id);
+    return ins(ws_id, ENTITY.EXHIBIT, {
+      label:    (payload?.label || '').trim(),
+      text:     (payload?.text  || '').trim(),
+      source_id: payload?.source_id || null,
+      doc_id:   payload?.doc_id   || null,
+      tags:     Array.isArray(payload?.tags) ? payload.tags : [],
+      created_at: Date.now(),
+      deleted: false,
+    });
+  },
+  async updateExhibit(ws_id, id, patch) {
+    const allowed = ['label', 'text', 'tags'];
+    for (const k of Object.keys(patch || {})) {
+      if (!allowed.includes(k)) continue;
+      await def(ws_id, id, k, patch[k]);
+    }
+  },
+  async deleteExhibit(ws_id, id) {
+    await def(ws_id, id, 'deleted', true);
+  },
 
   listEvidence(ws_id) { void ws_id; return []; },
 
@@ -506,6 +698,42 @@ function workspaceCard(r) {
     members,
     updated_at: Date.now(),
     e2ee: true,
+  };
+}
+
+function sourceCard(e) {
+  // Tolerate legacy field names from earlier slices (content_type, size,
+  // url, mxc_url) alongside the old DraftEO names. Old UI consumes the
+  // latter, so map them.
+  return {
+    source_id: e._anchor,
+    title: e.title || e.filename || e.source_url || e.url || 'Untitled',
+    filename: e.filename || null,
+    mime: e.mime || e.content_type || 'application/octet-stream',
+    size_bytes: e.size_bytes ?? e.size ?? 0,
+    uploaded_at: e.uploaded_at || e._created || Date.now(),
+    mxc_uri: e.mxc_uri || e.mxc_url || null,
+    encryption_info: e.encryption_info || null,
+    archive_org_url: e.archive_org_url || null,
+    archived_at: e.archived_at || null,
+    archive_org_identifier: e.archive_org_identifier || null,
+    archive_org_filename: e.archive_org_filename || null,
+    source_url: e.source_url || e.url || null,
+    description: e.description || '',
+    tags: Array.isArray(e.tags) ? e.tags : [],
+    hidden: !!e.hidden,
+  };
+}
+
+function exhibitCard(e) {
+  return {
+    id: e._anchor,
+    label: e.label || '',
+    text: e.text || '',
+    source_id: e.source_id || null,
+    doc_id: e.doc_id || null,
+    tags: Array.isArray(e.tags) ? e.tags : [],
+    created_at: e.created_at || e._created || Date.now(),
   };
 }
 

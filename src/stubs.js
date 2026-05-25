@@ -29,20 +29,14 @@
     },
   };
 
-  // SourceViewer.open(doc_id, source_id, ws_id, app) — returns an Element.
-  window.SourceViewer = window.SourceViewer || {
-    open(_doc_id, _source_id, _ws_id, _app) {
-      return placeholder('Source viewer — Phase 3', 'In-app source viewer returns in Phase 3.');
-    },
-  };
-
-  // SearchSources.open(ws_id, app) — opens a search overlay.
+  // SearchSources.open(ws_id, app) — opens a search overlay. Search lands
+  // with the rest of the Phase 3+ source UI; until then it's a no-op so
+  // the workspace's search icon doesn't crash.
   window.SearchSources = window.SearchSources || {
     open(_ws_id, _app) { /* no-op */ },
   };
 
   // Other helpers some old modules call into.
-  window.Sources = window.Sources || {};
   window.Exporter = window.Exporter || {};
 
   // Crypto self-test indicator surfaced in the titlebar. Until we wire

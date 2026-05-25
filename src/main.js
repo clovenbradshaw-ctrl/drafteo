@@ -28,6 +28,8 @@ import './eo.js';
 import './markdown.js';
 import './login.js';
 import './history.js';
+import './sources.js';
+import './srcviewer.js';
 import './editor.js';
 import './projects.js';
 import './workspace.js';
