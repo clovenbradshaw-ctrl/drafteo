@@ -91,6 +91,64 @@ export function findDocEntity(state) {
   return docs.reduce((a, b) => (a._created <= b._created ? a : b));
 }
 
+// ── History / replay ──
+
+/**
+ * The full event list for a session, read back from the OPFS store.
+ * Returns events in chronological order.
+ */
+export async function getAllEvents(session) {
+  if (!session?.store) return [];
+  return session.store.getAll();
+}
+
+/**
+ * The body-edit history for a document room.
+ * Returns chronologically ordered { ts, value, sender } tuples — one per
+ * DEF(body) event. The first INS may also supply an initial body via the
+ * payload; that's emitted as a synthetic entry at the INS timestamp.
+ */
+export async function getBodyHistory(session) {
+  const events = await getAllEvents(session);
+  const ns = getNamespace();
+  const insType = `${ns}.ins`;
+  const defType = `${ns}.def`;
+  const history = [];
+
+  for (const e of events) {
+    if (e.type === insType && e.content?.entity_type === ENTITY.DOCUMENT) {
+      history.push({
+        ts: e.origin_server_ts,
+        value: e.content?.payload?.body ?? '',
+        sender: e.sender,
+        kind: 'init',
+      });
+    } else if (e.type === defType && e.content?.path === 'body') {
+      history.push({
+        ts: e.origin_server_ts,
+        value: e.content?.value ?? '',
+        sender: e.sender,
+        kind: 'edit',
+      });
+    }
+  }
+  history.sort((a, b) => a.ts - b.ts);
+  return history;
+}
+
+/**
+ * Replay the fold up to (and including) `atTs` and return the body string
+ * of the canonical document entity at that point. Returns null if no doc
+ * existed yet at that time.
+ */
+export async function replayDocAt(session, atTs) {
+  const events = await getAllEvents(session);
+  const subset = events.filter((e) => (e.origin_server_ts ?? 0) <= atTs);
+  const state = fold(subset);
+  const doc = findDocEntity(state);
+  return doc ? (doc.body ?? '') : null;
+}
+
 // ── Document mutations ──
 
 export async function saveDocTitle(roomId, anchor, title) {

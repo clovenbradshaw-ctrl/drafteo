@@ -14,9 +14,13 @@ import {
   createWorkspace, createDocument,
   getRoomName, getRoomMembers, inviteToRoom,
   RoomSession, findDocEntity, saveDocTitle, saveDocBody, saveDocStage,
+  getBodyHistory, replayDocAt,
   STAGES, ROOM_TYPE,
 } from './model.js';
 import { discoverRooms, onRoomChanges, acceptInvite } from './rooms.js';
+import { marked } from 'marked';
+
+marked.setOptions({ gfm: true, breaks: false });
 
 const $ = (id) => document.getElementById(id);
 
@@ -194,6 +198,20 @@ let editorSession = null;
 let editorUnsub = null;
 let titleSaveTimer = null;
 let bodySaveTimer = null;
+let currentMode = 'edit';
+let historyEntries = [];
+let historyPreviewIdx = -1;
+
+const SLASH_ITEMS = [
+  { label: 'Heading 1',  hint: '/h1',     insert: '\n# ' },
+  { label: 'Heading 2',  hint: '/h2',     insert: '\n## ' },
+  { label: 'Heading 3',  hint: '/h3',     insert: '\n### ' },
+  { label: 'Quote',      hint: '/quote',  insert: '\n> ' },
+  { label: 'Bullet',     hint: '/list',   insert: '\n- ' },
+  { label: 'Numbered',   hint: '/num',    insert: '\n1. ' },
+  { label: 'Code block', hint: '/code',   insert: '\n```\n\n```\n' },
+  { label: 'Citation',   hint: '/cite',   insert: '{{cite:}}' },
+];
 
 export async function renderEditor(roomId, workspaceId, { onBack }) {
   showView('view-editor');
@@ -210,6 +228,7 @@ export async function renderEditor(roomId, workspaceId, { onBack }) {
   const bodyInput = $('docBody');
   const stageSelect = $('docStage');
   const status = $('saveStatus');
+  const previewBody = $('previewBody');
 
   // Hard reset before async open so we never show stale doc state.
   titleInput.value = '';
@@ -220,6 +239,7 @@ export async function renderEditor(roomId, workspaceId, { onBack }) {
   stageSelect.disabled = true;
   status.textContent = 'opening…';
   $('docMembers').textContent = '—';
+  previewBody.innerHTML = '';
 
   // Stage select options
   if (stageSelect.options.length === 0) {
@@ -229,6 +249,12 @@ export async function renderEditor(roomId, workspaceId, { onBack }) {
       stageSelect.appendChild(opt);
     }
   }
+
+  // Mode tabs
+  setMode('edit');
+  document.querySelectorAll('#view-editor .editor-tabs .tab').forEach((btn) => {
+    btn.onclick = () => setMode(btn.dataset.mode, { roomId });
+  });
 
   editorSession = new RoomSession(roomId);
   try {
@@ -280,6 +306,7 @@ export async function renderEditor(roomId, workspaceId, { onBack }) {
     }
     status.textContent = 'saved';
     paintMembers('docMembers', roomId);
+    if (currentMode === 'preview') renderPreviewBody(bodyInput.value);
   };
 
   applyState(editorSession.state);
@@ -314,19 +341,238 @@ export async function renderEditor(roomId, workspaceId, { onBack }) {
     status.textContent = 'editing…';
     clearTimeout(bodySaveTimer);
     bodySaveTimer = setTimeout(flush('body'), 1200);
+    maybeShowSlashMenu(bodyInput);
   };
+  bodyInput.onkeydown = (ev) => handleSlashKey(ev, bodyInput);
+  bodyInput.onblur = () => setTimeout(() => hideSlashMenu(), 100);
   stageSelect.onchange = flush('stage');
+
+  // History UI handlers
+  $('historyExitBtn').onclick = () => setMode('edit');
+  $('historyRestoreBtn').onclick = async () => {
+    if (historyPreviewIdx < 0 || !historyEntries[historyPreviewIdx]) return;
+    const entry = historyEntries[historyPreviewIdx];
+    const doc = findDocEntity(editorSession.state);
+    if (!doc) return;
+    if (!confirm(`Restore document to version from ${new Date(entry.ts).toLocaleString()}? This creates a new edit; nothing is destroyed.`)) return;
+    try {
+      status.textContent = 'restoring…';
+      await saveDocBody(roomId, doc._anchor, entry.value);
+      status.textContent = 'restored';
+      log('restored historical version', 'ok');
+      setMode('edit');
+    } catch (e) {
+      log('restore failed: ' + e.message, 'err');
+      status.textContent = 'restore failed';
+    }
+  };
+  $('historyScrub').oninput = (ev) => {
+    const idx = parseInt(ev.target.value, 10);
+    showHistoryAt(idx);
+  };
 }
 
 export async function closeEditor() {
   clearTimeout(titleSaveTimer); titleSaveTimer = null;
   clearTimeout(bodySaveTimer); bodySaveTimer = null;
+  hideSlashMenu();
   if (editorUnsub) { editorUnsub(); editorUnsub = null; }
   if (editorSession) {
     const s = editorSession;
     editorSession = null;
     await s.close();
   }
+  historyEntries = [];
+  historyPreviewIdx = -1;
+  currentMode = 'edit';
+}
+
+// ── Editor mode switching ──
+
+async function setMode(mode) {
+  currentMode = mode;
+  document.querySelectorAll('#view-editor .editor-tabs .tab').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  });
+  $('editorEdit').classList.toggle('hidden', mode !== 'edit');
+  $('editorPreview').classList.toggle('hidden', mode !== 'preview');
+  $('editorHistory').classList.toggle('hidden', mode !== 'history');
+
+  if (mode === 'preview') {
+    renderPreviewBody($('docBody').value);
+  } else if (mode === 'history') {
+    await loadHistory();
+  }
+}
+
+function renderPreviewBody(markdown) {
+  const html = renderMarkdownWithCitations(markdown || '');
+  $('previewBody').innerHTML = html;
+}
+
+// Render markdown to HTML, swapping {{cite:ID}} tokens for footnote refs.
+// Returns HTML string. (Sources/footnote bodies arrive in a later slice.)
+export function renderMarkdownWithCitations(md, sourcesByAnchor = null) {
+  const cites = [];
+  const replaced = md.replace(/\{\{cite:([^}]+)\}\}/g, (_, id) => {
+    const idx = cites.indexOf(id);
+    const n = idx === -1 ? cites.push(id) : idx + 1;
+    return `[^${n}]`;
+  });
+  let html = marked.parse(replaced);
+  // marked doesn't render `[^n]` outside `^[n]:` footnote definitions, so we
+  // surface them as visible refs.
+  html = html.replace(/\[\^(\d+)\]/g, (_, n) => `<sup class="cite-ref" title="citation">${n}</sup>`);
+  if (cites.length > 0) {
+    const items = cites.map((id, i) => {
+      const src = sourcesByAnchor?.[id];
+      const label = src?.title ? `${escapeHtml(src.title)}` : `<code>${escapeHtml(id)}</code>`;
+      const url = src?.archive_org_url || src?.url || '';
+      const link = url ? ` — <a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(url)}</a>` : '';
+      return `<li>${label}${link}</li>`;
+    }).join('');
+    html += `<div class="footnotes"><h3>Citations</h3><ol>${items}</ol></div>`;
+  }
+  return html;
+}
+
+// ── Slash menu ──
+
+let slashAnchor = -1; // index of `/` in textarea, or -1 if no menu open
+let slashSelectedIdx = 0;
+let slashFiltered = [];
+
+function maybeShowSlashMenu(textarea) {
+  const v = textarea.value;
+  const pos = textarea.selectionStart;
+  // Find the most recent `/` since the previous whitespace.
+  let i = pos - 1;
+  let token = '';
+  while (i >= 0 && !/[\s]/.test(v[i])) {
+    token = v[i] + token;
+    if (v[i] === '/') {
+      slashAnchor = i;
+      const filter = token.slice(1).toLowerCase();
+      slashFiltered = SLASH_ITEMS.filter((it) =>
+        it.label.toLowerCase().includes(filter) || it.hint.includes(filter)
+      );
+      if (slashFiltered.length === 0) { hideSlashMenu(); return; }
+      slashSelectedIdx = 0;
+      paintSlashMenu(textarea);
+      return;
+    }
+    i--;
+  }
+  hideSlashMenu();
+}
+
+function paintSlashMenu(textarea) {
+  const menu = $('slashMenu');
+  menu.innerHTML = slashFiltered.map((it, i) =>
+    `<div class="item${i === slashSelectedIdx ? ' selected' : ''}" data-i="${i}"><span>${escapeHtml(it.label)}</span><span class="hint">${escapeHtml(it.hint)}</span></div>`
+  ).join('');
+  // Position roughly under the textarea start; good enough for an MVP.
+  menu.style.left = '8px';
+  menu.style.top = (textarea.offsetTop + 32) + 'px';
+  menu.classList.remove('hidden');
+  menu.querySelectorAll('.item').forEach((el) => {
+    el.onmousedown = (ev) => {
+      ev.preventDefault();
+      slashSelectedIdx = parseInt(el.dataset.i, 10);
+      commitSlash(textarea);
+    };
+  });
+}
+
+function hideSlashMenu() {
+  slashAnchor = -1;
+  slashFiltered = [];
+  $('slashMenu')?.classList.add('hidden');
+}
+
+function handleSlashKey(ev, textarea) {
+  if (slashAnchor < 0) return;
+  if (ev.key === 'Escape') { hideSlashMenu(); return; }
+  if (ev.key === 'ArrowDown') {
+    ev.preventDefault();
+    slashSelectedIdx = (slashSelectedIdx + 1) % slashFiltered.length;
+    paintSlashMenu(textarea);
+  } else if (ev.key === 'ArrowUp') {
+    ev.preventDefault();
+    slashSelectedIdx = (slashSelectedIdx - 1 + slashFiltered.length) % slashFiltered.length;
+    paintSlashMenu(textarea);
+  } else if (ev.key === 'Enter' || ev.key === 'Tab') {
+    ev.preventDefault();
+    commitSlash(textarea);
+  }
+}
+
+function commitSlash(textarea) {
+  if (slashAnchor < 0) { hideSlashMenu(); return; }
+  const item = slashFiltered[slashSelectedIdx];
+  if (!item) { hideSlashMenu(); return; }
+  const before = textarea.value.slice(0, slashAnchor);
+  const after = textarea.value.slice(textarea.selectionStart);
+  textarea.value = before + item.insert + after;
+  const caret = (before + item.insert).length;
+  textarea.setSelectionRange(caret, caret);
+  hideSlashMenu();
+  textarea.dispatchEvent(new Event('input'));
+  textarea.focus();
+}
+
+// ── History view ──
+
+async function loadHistory() {
+  $('historyLabel').textContent = 'loading history…';
+  $('historyPreview').innerHTML = '';
+  $('historyRestoreBtn').disabled = true;
+  historyEntries = await getBodyHistory(editorSession);
+
+  const scrub = $('historyScrub');
+  scrub.min = 0;
+  scrub.max = Math.max(0, historyEntries.length - 1);
+
+  // Default to current (last) version
+  const last = historyEntries.length - 1;
+  scrub.value = String(Math.max(0, last));
+  paintHistoryTicks();
+  if (last >= 0) {
+    showHistoryAt(last);
+  } else {
+    $('historyLabel').textContent = 'no history yet';
+  }
+}
+
+function paintHistoryTicks() {
+  const el = $('historyTicks');
+  el.innerHTML = '';
+  if (historyEntries.length === 0) return;
+  const first = historyEntries[0].ts;
+  const last = historyEntries[historyEntries.length - 1].ts;
+  const span = Math.max(1, last - first);
+  for (const e of historyEntries) {
+    const pct = ((e.ts - first) / span) * 100;
+    const tick = document.createElement('div');
+    tick.className = 'tick' + (e.kind === 'init' ? ' init' : '');
+    tick.style.left = pct + '%';
+    tick.title = new Date(e.ts).toLocaleString();
+    el.appendChild(tick);
+  }
+}
+
+async function showHistoryAt(idx) {
+  if (idx < 0 || idx >= historyEntries.length) return;
+  historyPreviewIdx = idx;
+  const entry = historyEntries[idx];
+  const isLatest = idx === historyEntries.length - 1;
+  $('historyLabel').textContent =
+    `${idx + 1} / ${historyEntries.length} · ${new Date(entry.ts).toLocaleString()} · ${entry.sender || 'unknown'}${isLatest ? ' (current)' : ''}`;
+  // Replay fold up to this entry's ts so the preview matches what fold would
+  // have produced (handles deletes, body restores, etc.).
+  const body = await replayDocAt(editorSession, entry.ts);
+  $('historyPreview').innerHTML = renderMarkdownWithCitations(body || '');
+  $('historyRestoreBtn').disabled = isLatest;
 }
 
 // ── util ──

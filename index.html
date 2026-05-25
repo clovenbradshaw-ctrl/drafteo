@@ -89,10 +89,61 @@ button.ghost:hover { color:var(--accent); background:transparent; }
 .editor-header select { width:auto; min-width:120px; }
 .save-status { font-size:11px; color:var(--text-dim); min-width:70px; text-align:right; }
 .body-input {
-  width:100%; min-height:60vh; margin-top:12px;
+  width:100%; min-height:60vh;
   background:var(--bg); border:1px solid var(--border);
   padding:14px 16px; line-height:1.7; font-size:14px; resize:vertical;
 }
+
+/* Editor tabs */
+.editor-tabs { display:flex; gap:4px; margin:14px 0 10px; border-bottom:1px solid var(--border); }
+.editor-tabs .tab {
+  padding:6px 12px; background:transparent; border:none; border-bottom:2px solid transparent;
+  color:var(--text-dim); font-size:11px; text-transform:uppercase; letter-spacing:1.2px; cursor:pointer;
+}
+.editor-tabs .tab:hover { color:var(--text); background:transparent; }
+.editor-tabs .tab.active { color:var(--accent); border-bottom-color:var(--accent); }
+.editor-body { position:relative; }
+.editor-mode { display:block; }
+.editor-mode.hidden { display:none; }
+
+/* Preview */
+.preview {
+  background:var(--bg); border:1px solid var(--border); border-radius:var(--radius);
+  padding:24px 28px; min-height:60vh; font-family:var(--serif); font-size:15px; line-height:1.75;
+  color:var(--text);
+}
+.preview h1, .preview h2, .preview h3 { font-family:var(--serif); color:var(--text-bright); margin:18px 0 10px; }
+.preview h1 { font-size:24px; }
+.preview h2 { font-size:19px; }
+.preview h3 { font-size:16px; text-transform:uppercase; letter-spacing:1px; color:var(--accent); }
+.preview p { margin-bottom:12px; }
+.preview a { color:var(--accent); text-decoration:underline; text-decoration-color:var(--accent-dim); }
+.preview blockquote { border-left:2px solid var(--accent-dim); padding:6px 14px; margin:14px 0; color:var(--text-dim); }
+.preview ul, .preview ol { margin:8px 0 12px 20px; }
+.preview code { background:var(--surface-2); padding:2px 4px; border-radius:2px; font-family:var(--mono); font-size:13px; }
+.preview pre { background:var(--surface-2); padding:12px 14px; border-radius:var(--radius); overflow-x:auto; font-family:var(--mono); font-size:12px; margin:10px 0; }
+.preview .cite-ref { color:var(--accent); font-family:var(--mono); font-size:11px; vertical-align:super; cursor:help; }
+.preview .footnotes { border-top:1px solid var(--border); margin-top:28px; padding-top:16px; font-size:12px; color:var(--text-dim); }
+.preview .footnotes ol { font-family:var(--mono); }
+
+/* Slash menu */
+.slash-menu {
+  position:absolute; z-index:10; background:var(--surface-2);
+  border:1px solid var(--accent-dim); border-radius:var(--radius);
+  padding:4px; min-width:200px; max-height:240px; overflow-y:auto;
+  box-shadow:0 8px 24px rgba(0,0,0,.5);
+}
+.slash-menu .item { padding:6px 10px; cursor:pointer; font-size:12px; display:flex; justify-content:space-between; gap:10px; }
+.slash-menu .item:hover, .slash-menu .item.selected { background:var(--accent-glow); color:var(--text-bright); }
+.slash-menu .item .hint { color:var(--text-dim); font-size:10px; }
+
+/* History */
+.history-controls { display:flex; align-items:center; gap:12px; margin-bottom:12px; }
+.history-scrub { width:100%; accent-color:var(--accent); }
+.history-ticks { position:relative; height:18px; margin-bottom:14px; font-size:10px; color:var(--text-dim); }
+.history-ticks .tick { position:absolute; transform:translateX(-50%); width:2px; height:8px; background:var(--accent-dim); top:0; }
+.history-ticks .tick.init { background:var(--green); height:12px; }
+.history-preview { min-height:50vh; }
 
 /* Log strip */
 #log {
@@ -196,7 +247,32 @@ button.ghost:hover { color:var(--accent); background:transparent; }
         <span id="docMembers">—</span>
         <button id="docInviteBtn" class="ghost">+ Invite</button>
       </div>
-      <textarea id="docBody" class="body-input" placeholder="Start writing…"></textarea>
+
+      <div class="editor-tabs">
+        <button class="tab active" data-mode="edit">Edit</button>
+        <button class="tab" data-mode="preview">Preview</button>
+        <button class="tab" data-mode="history">History</button>
+      </div>
+
+      <div class="editor-body">
+        <div id="editorEdit" class="editor-mode">
+          <textarea id="docBody" class="body-input" placeholder="Start writing…  (type / for blocks)"></textarea>
+          <div id="slashMenu" class="slash-menu hidden"></div>
+        </div>
+        <div id="editorPreview" class="editor-mode hidden">
+          <article id="previewBody" class="preview"></article>
+        </div>
+        <div id="editorHistory" class="editor-mode hidden">
+          <div class="history-controls">
+            <span id="historyLabel" class="dim">—</span>
+            <button id="historyRestoreBtn" class="primary" disabled>Restore this version</button>
+            <button id="historyExitBtn" class="ghost">Back to current</button>
+          </div>
+          <input id="historyScrub" class="history-scrub" type="range" min="0" max="0" value="0">
+          <div id="historyTicks" class="history-ticks"></div>
+          <article id="historyPreview" class="preview history-preview"></article>
+        </div>
+      </div>
     </div>
   </section>
 

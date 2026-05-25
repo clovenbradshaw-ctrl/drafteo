@@ -9,11 +9,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "marked": "^18.0.4",
     "matrix-js-sdk": "^41.5.0"
   },
   "devDependencies": {
     "vite": "^6.3.5",
-    "vite-plugin-wasm": "^3.4.1",
-    "vite-plugin-top-level-await": "^1.5.0"
+    "vite-plugin-top-level-await": "^1.5.0",
+    "vite-plugin-wasm": "^3.4.1"
   }
 }
