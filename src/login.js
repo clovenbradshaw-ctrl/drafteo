@@ -8,16 +8,34 @@
     const p = el('input', { type: 'password', placeholder: '••••••••', autocomplete: 'current-password' });
     const h = el('input', { type: 'text', placeholder: 'https://hyphae.social', value: 'https://hyphae.social' });
     const hLabel = el('label', 'Homeserver');
+    const hWrap = el('div.hsfield', { style: { display: 'none' } }, hLabel, h);
     const err = el('div', { style: { color: 'var(--err)', fontSize: '11px', marginTop: '10px', minHeight: '14px', fontFamily: 'var(--mono)' } });
     let busy = false;
+    let hsManuallyToggled = false;
+
+    const hsToggle = el('button.hslink', {
+      type: 'button',
+      onClick: (e) => {
+        e.preventDefault();
+        hsManuallyToggled = true;
+        const showing = hWrap.style.display !== 'none';
+        hWrap.style.display = showing ? 'none' : '';
+        hsToggle.textContent = showing ? 'Use a different homeserver' : 'Use Hyphae (default)';
+      },
+    }, 'Use a different homeserver');
 
     // If the user types a full Matrix ID (@name:server), the homeserver is
     // implied — hide the homeserver field and just use the server part.
     function syncHomeserverVisibility() {
       const v = u.value.trim();
       const isFullMxid = /^@?[^:\s]+:[a-z0-9.-]+\.[a-z]{2,}/i.test(v);
-      h.style.display = isFullMxid ? 'none' : '';
-      hLabel.style.display = isFullMxid ? 'none' : '';
+      if (isFullMxid) {
+        hWrap.style.display = 'none';
+        hsToggle.style.display = 'none';
+      } else {
+        hsToggle.style.display = '';
+        if (!hsManuallyToggled) hWrap.style.display = 'none';
+      }
     }
     u.addEventListener('input', syncHomeserverVisibility);
 
@@ -40,13 +58,24 @@
         onLoggedIn(session);
       } catch (e) {
         err.textContent = e.message || String(e);
-        submit.textContent = 'CONNECT';
+        submit.textContent = 'SIGN IN';
         submit.disabled = false;
         busy = false;
       }
     }
 
-    const submit = el('button.primary', { type: 'submit', onClick: (e) => { e.preventDefault(); doLogin(); } }, 'CONNECT');
+    const submit = el('button.primary', { type: 'submit', onClick: (e) => { e.preventDefault(); doLogin(); } }, 'SIGN IN');
+
+    const signupCta = el('a.signup-cta', {
+      href: 'https://hyphae.social',
+      target: '_blank',
+      rel: 'noopener',
+    },
+      el('div.signup-cta-main',
+        el('span.signup-cta-ttl', 'New here?'),
+        el('span.signup-cta-sub', 'Create a free Hyphae account →'),
+      ),
+    );
 
     const form = el('form.loginform', {
       onSubmit: (e) => { e.preventDefault(); doLogin(); }
@@ -55,20 +84,21 @@
         el('span', 'Sign in'),
         el('span', { style: { color: 'var(--ink-faint)' } }, 'Matrix'),
       ),
+      signupCta,
       el('label', 'Username or full Matrix ID'),
       u,
       el('label', 'Password'),
       p,
-      hLabel,
-      h,
+      hWrap,
+      hsToggle,
       el('div.actions', submit),
       err,
       el('div.hint',
-        'Don\'t have a Matrix account? Sign up at ',
-        el('a', { href: 'https://hyphae.social', target: '_blank', rel: 'noopener', style: { color: 'var(--accent)', textDecoration: 'underline' } }, 'hyphae.social'),
-        ' or pick any homeserver from ',
+        'Hyphae is the default homeserver. Already have a Matrix account on another server? ',
+        el('a', { href: '#', onClick: (e) => { e.preventDefault(); hsManuallyToggled = true; hWrap.style.display = ''; hsToggle.textContent = 'Use Hyphae (default)'; h.focus(); }, style: { color: 'var(--accent)', textDecoration: 'underline' } }, 'Use it here'),
+        '. Find more servers at ',
         el('a', { href: 'https://servers.joinmatrix.org/', target: '_blank', rel: 'noopener', style: { color: 'var(--accent)', textDecoration: 'underline' } }, 'servers.joinmatrix.org'),
-        '. DraftEO logs into your account on whichever server you choose — no separate signup.',
+        '.',
       ),
     );
 
