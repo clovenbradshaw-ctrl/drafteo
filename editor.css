@@ -1098,6 +1098,55 @@ button.primary {
   letter-spacing: 0 !important;
 }
 
+/* Sign-up call-to-action — pushes new users toward Hyphae */
+.loginform .signup-cta {
+  display: block;
+  text-decoration: none;
+  padding: 14px 16px;
+  margin: 0 0 22px;
+  background: var(--accent);
+  color: var(--surface);
+  border: 1px solid var(--accent);
+  transition: filter 0.15s ease, transform 0.15s ease;
+}
+.loginform .signup-cta:hover { filter: brightness(1.08); transform: translateY(-1px); }
+.loginform .signup-cta .signup-cta-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.loginform .signup-cta .signup-cta-ttl {
+  font-family: var(--sans) !important;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  opacity: 0.82;
+}
+.loginform .signup-cta .signup-cta-sub {
+  font-family: var(--display) !important;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+/* "Use a different homeserver" toggle link */
+.loginform .hslink {
+  display: block;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin-top: 10px;
+  font-family: var(--sans) !important;
+  font-size: 12px;
+  color: var(--ink-faint);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-align: left;
+}
+.loginform .hslink:hover { color: var(--accent); }
+
 /* Empty state */
 .empty-state h3 {
   font-family: var(--display) !important;
