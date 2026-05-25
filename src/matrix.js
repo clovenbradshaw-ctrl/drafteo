@@ -76,17 +76,37 @@ async function discoverHomeserver(hs) {
   return base;
 }
 
-async function buildClient(session) {
-  // Ensure Olm is initialized (idempotent).
-  if (globalThis.Olm && typeof globalThis.Olm.init === 'function') {
-    try {
-      await globalThis.Olm.init({
-        locateFile: () => globalThis.__olmWasmUrl,
-      });
-    } catch (e) {
-      // Already initialized, or wasm load issue — let initCrypto surface it.
-    }
+// Olm's own wasm fetcher swallows the real cause and surfaces
+// "both async and sync fetching of the wasm failed" — useless for
+// debugging. We pre-fetch the bytes ourselves so any HTTP failure
+// surfaces with the actual status + URL, and so a successful fetch
+// short-circuits Olm's loader via the `wasmBinary` option.
+let olmInitPromise = null;
+async function ensureOlmInitialized() {
+  if (olmInitPromise) return olmInitPromise;
+  if (!globalThis.Olm || typeof globalThis.Olm.init !== 'function') {
+    throw new Error('Olm module did not load. Reload the page; if this persists the JS bundle may be corrupted.');
   }
+  const url = globalThis.__olmWasmUrl;
+  olmInitPromise = (async () => {
+    let wasmBinary;
+    try {
+      const r = await fetch(url, { credentials: 'same-origin' });
+      if (!r.ok) {
+        throw new Error('Could not load encryption module (olm.wasm) — server returned HTTP ' + r.status + ' for ' + url + '. The site may be partially deployed; try a hard reload.');
+      }
+      wasmBinary = await r.arrayBuffer();
+    } catch (e) {
+      if (e && /Could not load encryption module/.test(e.message)) throw e;
+      throw new Error('Could not load encryption module (olm.wasm) from ' + url + ': ' + (e && e.message ? e.message : e));
+    }
+    await globalThis.Olm.init({ wasmBinary, locateFile: () => url });
+  })().catch((e) => { olmInitPromise = null; throw e; });
+  return olmInitPromise;
+}
+
+async function buildClient(session) {
+  await ensureOlmInitialized();
 
   // Persist session + crypto state in IndexedDB so reloads don't have to
   // re-download history or regenerate Olm device keys (which would break
