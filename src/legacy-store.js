@@ -33,6 +33,7 @@ import {
   setRecoveryKeyProvider,
 } from './client.js';
 import { setNamespace, getNamespace, ins, def, eva } from './operators.js';
+import { encryptAttachment, decryptAttachment } from 'matrix-encrypt-attachment';
 import { initial, fold, foldFrom, entitiesOfType } from './fold.js';
 import {
   createRoom, discoverRooms, getMembers, invite as inviteUser,
@@ -326,7 +327,12 @@ export const Store = {
     return Store.getDocument(doc_id);
   },
 
-  /** Append-only edit log derived from the document entity's _evaluations. */
+  /**
+   * Append-only edit log derived from the document entity's _evaluations.
+   * Returned in the old DraftEO shape (version_to / eo_operator / resolution
+   * / timestamp) plus newer convenience aliases (version / op / ts) so both
+   * the history scrubber and any newer reader can consume it.
+   */
   getEditLog(doc_id) {
     const session = documentSessions.get(doc_id);
     if (!session) return [];
@@ -336,16 +342,40 @@ export const Store = {
     return entries.map((e, i) => {
       let extra = {};
       try { extra = JSON.parse(e.note || '{}'); } catch (_) {}
+      const v = i + 1;
       return {
-        version: i + 1,
-        ts: e._ts,
+        version_to: v,
+        version: v,
+        eo_operator: e.result,
         op: e.result,
         resolution: extra.resolution || '',
         site: extra.site || '',
         note: extra.note || '',
+        timestamp: e._ts,
+        ts: e._ts,
         sender: e._sender || null,
       };
     });
+  },
+
+  /** Pinned checkpoints derived from EVA(criterion='checkpoint'). */
+  listCheckpoints(doc_id) {
+    const session = documentSessions.get(doc_id);
+    if (!session) return [];
+    const doc = findDocEntity(session.state);
+    if (!doc || !Array.isArray(doc._evaluations)) return [];
+    return doc._evaluations
+      .filter((e) => e.criterion === 'checkpoint')
+      .map((e) => {
+        let extra = {};
+        try { extra = JSON.parse(e.note || '{}'); } catch (_) {}
+        return {
+          name: extra.name || 'Checkpoint',
+          ts: e._ts,
+          sender: e._sender || null,
+        };
+      })
+      .sort((a, b) => a.ts - b.ts);
   },
 
   /** Body text at a given version (1-indexed). v=0 returns the initial INS body. */
@@ -390,14 +420,29 @@ export const Store = {
   },
 
   /**
-   * URL for a citation footnote. Phase 3 wires the real archive.org URL;
-   * for now we hand back whatever URL is on the source (if any) or null.
+   * URL for a citation footnote. Archived sources point readers at the
+   * DraftEO mini-viewer (renders the archived file with the cited span
+   * highlighted). Falls back to the source's original URL, then a
+   * pending-archive placeholder.
    */
   buildCitationUrl(source, footnote) {
-    void footnote;
-    if (!source) return null;
-    return source.archive_org_url || source.url || null;
+    if (!source) return '';
+    if (source.archive_org_identifier) {
+      const params = new URLSearchParams();
+      params.set('src', source.archive_org_identifier);
+      if (source.filename) params.set('file', source.filename);
+      if (source.mime) params.set('type', _mimeKind(source.mime));
+      if (footnote && footnote.page) params.set('page', footnote.page);
+      if (footnote && footnote.supporting_quote) params.set('q', footnote.supporting_quote);
+      if (footnote && footnote.note) params.set('note', footnote.note);
+      return Store.VIEWER_BASE + '#' + params.toString().replace(/%20/g, '+');
+    }
+    if (source.archive_org_url) return source.archive_org_url;
+    if (source.source_url) return source.source_url;
+    return '#pending-archive';
   },
+
+  VIEWER_BASE: 'https://clovenbradshaw-ctrl.github.io/drafteo/view.html',
 
   async deleteDocument(doc_id) {
     const client = getClient();
@@ -407,39 +452,548 @@ export const Store = {
     if (s) { try { await s.close(); } catch {} documentSessions.delete(doc_id); }
   },
 
-  // ── Stubs for Phase 2/3 ──
-  // The UI calls these but until later phases they're either reads-of-nothing
-  // or no-ops. Keep them present so workspace.js / projects.js don't crash.
+  // ── Sources (Phase 3) ──
 
   listSources(doc_id) {
-    void doc_id; return [];
+    const session = documentSessions.get(doc_id);
+    if (!session) return [];
+    return entitiesOfType(session.state, ENTITY.SOURCE)
+      .filter((e) => !e.deleted && !e.hidden)
+      .map(sourceCard)
+      .sort((a, b) => (a.uploaded_at || 0) - (b.uploaded_at || 0));
   },
+
+  listHiddenSources(doc_id) {
+    const session = documentSessions.get(doc_id);
+    if (!session) return [];
+    return entitiesOfType(session.state, ENTITY.SOURCE)
+      .filter((e) => !e.deleted && e.hidden)
+      .map(sourceCard)
+      .sort((a, b) => (b.uploaded_at || 0) - (a.uploaded_at || 0));
+  },
+
   getSource(doc_id, source_id) {
-    void doc_id; void source_id; return null;
+    const session = documentSessions.get(doc_id);
+    if (!session) return null;
+    const e = session.state.entities[source_id];
+    if (!e || e._type !== ENTITY.SOURCE) return null;
+    if (e.deleted) return null;
+    return sourceCard(e);
   },
-  async uploadSource() { throw new Error('Sources will be wired in Phase 3'); },
-  async updateSource()  { throw new Error('Sources will be wired in Phase 3'); },
-  async hideSource()    { throw new Error('Sources will be wired in Phase 3'); },
-  async deleteSource()  { throw new Error('Sources will be wired in Phase 3'); },
-  async importFromUrl() { throw new Error('Sources will be wired in Phase 3'); },
-  async archiveSource() { throw new Error('Sources will be wired in Phase 3'); },
 
-  listExhibits(ws_id) { void ws_id; return []; },
-  async updateExhibit() { throw new Error('Exhibits will be wired in Phase 4'); },
-  async deleteExhibit() { throw new Error('Exhibits will be wired in Phase 4'); },
+  /**
+   * Encrypt the file client-side, upload the ciphertext to the homeserver
+   * media repo, and INS a source entity into the document room carrying
+   * the mxc URL alongside the encryption descriptor. The plaintext never
+   * leaves the client.
+   */
+  async uploadSource(doc_id, file, patch) {
+    const session = await ensureDocumentSession(doc_id);
+    void session;
+    const client = getClient();
+    if (!client) throw new Error('Not connected');
 
-  listEvidence(ws_id) { void ws_id; return []; },
+    const plaintext = await file.arrayBuffer();
+    const { data: ciphertext, info } = await encryptAttachment(plaintext);
+    const blob = new Blob([ciphertext], { type: 'application/octet-stream' });
+    const resp = await client.uploadContent(blob, {
+      name: file.name,
+      type: 'application/octet-stream',
+    });
+    const mxc = typeof resp === 'string' ? resp : (resp.content_uri || resp);
 
-  // Comments + suggestions (Phase 5). Editor renders empty panels with
-  // these returning []; mutators announce when they're touched so we
-  // surface misuse early.
-  listComments(doc_id) { void doc_id; return []; },
-  listSuggestions(doc_id) { void doc_id; return []; },
-  async createComment()    { throw new Error('Comments arrive in Phase 5'); },
-  async replyComment()     { throw new Error('Comments arrive in Phase 5'); },
-  async resolveComment()   { throw new Error('Comments arrive in Phase 5'); },
-  async createSuggestion() { throw new Error('Suggestions arrive in Phase 5'); },
-  async updateSuggestion() { throw new Error('Suggestions arrive in Phase 5'); },
+    const payload = {
+      title: (patch?.title || file.name || 'Untitled').trim(),
+      filename: file.name,
+      mime: file.type || 'application/octet-stream',
+      size_bytes: file.size,
+      uploaded_at: Date.now(),
+      mxc_uri: mxc,
+      encryption_info: info,
+      source_url: null,
+      description: patch?.description || '',
+      tags: Array.isArray(patch?.tags) ? patch.tags : [],
+      hidden: false,
+      deleted: false,
+    };
+    const anchor = await ins(doc_id, ENTITY.SOURCE, payload);
+    return Store.getSource(doc_id, anchor) || { source_id: anchor, ...payload };
+  },
+
+  /** URL-only source — no media upload. */
+  async importFromUrl(doc_id, url) {
+    if (!url) throw new Error('URL required');
+    const session = await ensureDocumentSession(doc_id);
+    void session;
+    const trimmed = String(url).trim();
+    const payload = {
+      title: trimmed,
+      filename: trimmed.replace(/^https?:\/\//, '').slice(0, 80),
+      mime: 'text/html',
+      size_bytes: 0,
+      uploaded_at: Date.now(),
+      mxc_uri: null,
+      encryption_info: null,
+      source_url: trimmed,
+      description: '',
+      tags: [],
+      hidden: false,
+      deleted: false,
+    };
+    const anchor = await ins(doc_id, ENTITY.SOURCE, payload);
+    return Store.getSource(doc_id, anchor) || { source_id: anchor, ...payload };
+  },
+
+  async updateSource(doc_id, source_id, patch) {
+    const allowed = ['title', 'description', 'tags', 'archive_org_url',
+                     'archived_at', 'archive_org_identifier',
+                     'archive_org_filename'];
+    for (const k of Object.keys(patch || {})) {
+      if (!allowed.includes(k)) continue;
+      await def(doc_id, source_id, k, patch[k]);
+    }
+    return Store.getSource(doc_id, source_id);
+  },
+
+  async hideSource(doc_id, source_id, hidden) {
+    await def(doc_id, source_id, 'hidden', !!hidden);
+    return Store.getSource(doc_id, source_id);
+  },
+
+  /** Permanent delete (tombstone via DEF). Citations to it go orphaned. */
+  async deleteSource(doc_id, source_id) {
+    await def(doc_id, source_id, 'deleted', true);
+  },
+
+  /**
+   * Archive flow: opens the Wayback Machine save endpoint in a new tab,
+   * then prompts for the resulting archive URL. Wayback's CORS policy
+   * blocks programmatic reads of the save response from a browser, so
+   * the user pastes the URL back when the save finishes.
+   */
+  async archiveSource(doc_id, source_id, onProgress) {
+    const s = Store.getSource(doc_id, source_id);
+    if (!s) throw new Error('source not found');
+    const target = s.source_url || (s.mxc_uri ? null : null);
+    if (!target) {
+      // No URL to archive. The file is already preserved on the homeserver
+      // and encrypted; for now we surface this as an error so the caller
+      // knows. Phase 6 may pipe file→Wayback via a server proxy.
+      throw new Error('archive.org only accepts URL sources for now');
+    }
+    onProgress && onProgress('opening Wayback Machine…');
+    const saveUrl = `https://web.archive.org/save/${encodeURI(target)}`;
+    try { window.open(saveUrl, '_blank', 'noopener'); } catch (_) {}
+    const archived = (typeof prompt === 'function') ? prompt(
+      'After the Wayback Machine finishes saving, copy the resulting URL\n' +
+      '(it starts with https://web.archive.org/web/) and paste it here:',
+      ''
+    ) : null;
+    if (!archived) {
+      onProgress && onProgress('cancelled');
+      return Store.getSource(doc_id, source_id);
+    }
+    onProgress && onProgress('recording archive…');
+    await Store.updateSource(doc_id, source_id, {
+      archive_org_url: archived.trim(),
+      archived_at: Date.now(),
+    });
+    onProgress && onProgress('done');
+    return Store.getSource(doc_id, source_id);
+  },
+
+  /**
+   * Legacy API: returned cached base64. The new foundation doesn't cache
+   * inline — it fetches + decrypts on demand. Callers should use
+   * fetchMedia() (async) instead. Keeping this sync stub so old code
+   * paths that read `Store.getMedia(...)` don't crash; returns null.
+   */
+  getMedia(_mxc_uri) { return null; },
+
+  /**
+   * Fetch the ciphertext from the media repo, decrypt with the source's
+   * encryption_info, return a blob URL. Caller is responsible for
+   * URL.revokeObjectURL when done. URL-only sources return null.
+   */
+  async fetchMedia(source) {
+    if (!source || !source.mxc_uri) return null;
+    const client = getClient();
+    if (!client) return null;
+    const httpUrl = client.mxcUrlToHttp(source.mxc_uri);
+    if (!httpUrl) return null;
+    const resp = await fetch(httpUrl);
+    if (!resp.ok) throw new Error('media fetch failed: HTTP ' + resp.status);
+    const buf = await resp.arrayBuffer();
+    let plaintext = buf;
+    if (source.encryption_info) {
+      plaintext = await decryptAttachment(buf, source.encryption_info);
+    }
+    const blob = new Blob([plaintext], { type: source.mime || 'application/octet-stream' });
+    return URL.createObjectURL(blob);
+  },
+
+  // Exhibits (Phase 4 lists+edits; Phase 3 only creates from srcviewer)
+  listExhibits(ws_id) {
+    const session = workspaceSessions.get(ws_id);
+    if (!session) return [];
+    return entitiesOfType(session.state, ENTITY.EXHIBIT)
+      .filter((e) => !e.deleted)
+      .map(exhibitCard)
+      .sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+  },
+  async createExhibit(ws_id, payload) {
+    ensureWorkspaceSession(ws_id);
+    return ins(ws_id, ENTITY.EXHIBIT, {
+      label:    (payload?.label || '').trim(),
+      text:     (payload?.text  || '').trim(),
+      source_id: payload?.source_id || null,
+      doc_id:   payload?.doc_id   || null,
+      tags:     Array.isArray(payload?.tags) ? payload.tags : [],
+      created_at: Date.now(),
+      deleted: false,
+    });
+  },
+  async updateExhibit(ws_id, id, patch) {
+    const allowed = ['label', 'text', 'tags'];
+    for (const k of Object.keys(patch || {})) {
+      if (!allowed.includes(k)) continue;
+      await def(ws_id, id, k, patch[k]);
+    }
+  },
+  async deleteExhibit(ws_id, id) {
+    await def(ws_id, id, 'deleted', true);
+  },
+
+  // ── Corkboard: boards, evidence, strings, holons (Phase 4) ──
+
+  listBoards(ws_id) {
+    if (!ws_id) return [];
+    ensureWorkspaceSession(ws_id);
+    const session = workspaceSessions.get(ws_id);
+    if (!session) return [];
+    const boards = entitiesOfType(session.state, 'board')
+      .filter((b) => !b.deleted)
+      .map(boardCard)
+      .sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
+    // Auto-create a default board the first time we render after the
+    // session is warm. Fire-and-forget; the next render picks it up.
+    if (boards.length === 0 && session.store && session.store.hasData?.() !== undefined) {
+      const seedKey = '__autoseed_board_' + ws_id;
+      if (!autoseedFlags[seedKey]) {
+        autoseedFlags[seedKey] = true;
+        ins(ws_id, 'board', { name: 'Main', created_at: Date.now() })
+          .then((id) => {
+            try { localStorage.setItem('drafteo.board.active.' + ws_id, id); } catch (_) {}
+          })
+          .catch((e) => console.warn('[store-shim] default board create failed', e));
+      }
+    }
+    return boards;
+  },
+
+  activeBoard(ws_id) {
+    if (!ws_id) return null;
+    let saved = null;
+    try { saved = localStorage.getItem('drafteo.board.active.' + ws_id); } catch (_) {}
+    const boards = Store.listBoards(ws_id);
+    if (saved && boards.some((b) => b.id === saved)) return saved;
+    return boards[0]?.id || null;
+  },
+
+  async setActiveBoard(ws_id, board_id) {
+    try { localStorage.setItem('drafteo.board.active.' + ws_id, board_id); } catch (_) {}
+  },
+
+  async createBoard(ws_id, name) {
+    ensureWorkspaceSession(ws_id);
+    const id = await ins(ws_id, 'board', {
+      name: (name || 'New board').trim(),
+      created_at: Date.now(),
+    });
+    try { localStorage.setItem('drafteo.board.active.' + ws_id, id); } catch (_) {}
+    return id;
+  },
+
+  async renameBoard(ws_id, board_id, name) {
+    await def(ws_id, board_id, 'name', (name || '').trim());
+  },
+
+  async deleteBoard(ws_id, board_id) {
+    const boards = Store.listBoards(ws_id);
+    if (boards.length <= 1) throw new Error('Need at least one board.');
+    await def(ws_id, board_id, 'deleted', true);
+    if (Store.activeBoard(ws_id) === board_id) {
+      const remaining = Store.listBoards(ws_id).find((b) => b.id !== board_id);
+      if (remaining) await Store.setActiveBoard(ws_id, remaining.id);
+    }
+  },
+
+  async createEvidence(ws_id, patch) {
+    ensureWorkspaceSession(ws_id);
+    const board_id = patch?.board_id || Store.activeBoard(ws_id);
+    const payload = {
+      board_id,
+      source_id: patch?.source_id || null,
+      doc_id: patch?.doc_id || null,
+      quote: patch?.quote || '',
+      note: patch?.note || '',
+      tags: Array.isArray(patch?.tags) ? patch.tags : [],
+      color: patch?.color || 'amber',
+      x: patch?.x ?? (40 + Math.round(Math.random() * 240)),
+      y: patch?.y ?? (40 + Math.round(Math.random() * 160)),
+      w: patch?.w ?? 220,
+      h: patch?.h ?? 160,
+      created_at: Date.now(),
+      author: currentSession?.matrix_id || null,
+      deleted: false,
+    };
+    const id = await ins(ws_id, 'evidence', payload);
+    return Object.assign({ id }, payload);
+  },
+
+  async updateEvidence(ws_id, id, patch) {
+    const allowed = ['quote', 'note', 'tags', 'color', 'x', 'y', 'w', 'h', 'source_id', 'doc_id', 'board_id'];
+    for (const k of Object.keys(patch || {})) {
+      if (!allowed.includes(k)) continue;
+      await def(ws_id, id, k, patch[k]);
+    }
+  },
+
+  async deleteEvidence(ws_id, id) {
+    await def(ws_id, id, 'deleted', true);
+  },
+
+  listEvidence(ws_id, board_id) {
+    if (!ws_id) return [];
+    ensureWorkspaceSession(ws_id);
+    const session = workspaceSessions.get(ws_id);
+    if (!session) return [];
+    const bid = board_id || Store.activeBoard(ws_id);
+    if (!bid) return [];
+    return entitiesOfType(session.state, 'evidence')
+      .filter((e) => !e.deleted && (e.board_id || bid) === bid)
+      .map(evidenceCard)
+      .sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
+  },
+
+  async createString(ws_id, from, to, label) {
+    ensureWorkspaceSession(ws_id);
+    const board_id = Store.activeBoard(ws_id);
+    return ins(ws_id, 'string', {
+      board_id, from, to,
+      label: label || '',
+      kind: 'connects',
+      direction: 'undirected',
+      created_at: Date.now(),
+      deleted: false,
+    });
+  },
+
+  async updateString(ws_id, id, patch) {
+    const allowed = ['label', 'kind', 'direction'];
+    for (const k of Object.keys(patch || {})) {
+      if (!allowed.includes(k)) continue;
+      await def(ws_id, id, k, patch[k]);
+    }
+  },
+
+  async deleteString(ws_id, id) {
+    await def(ws_id, id, 'deleted', true);
+  },
+
+  listStrings(ws_id, board_id) {
+    if (!ws_id) return [];
+    ensureWorkspaceSession(ws_id);
+    const session = workspaceSessions.get(ws_id);
+    if (!session) return [];
+    const bid = board_id || Store.activeBoard(ws_id);
+    if (!bid) return [];
+    return entitiesOfType(session.state, 'string')
+      .filter((s) => !s.deleted && (s.board_id || bid) === bid)
+      .map((s) => ({
+        id: s._anchor,
+        from: s.from, to: s.to,
+        board_id: s.board_id,
+        label: s.label || '',
+        kind: s.kind || 'connects',
+        direction: s.direction || 'undirected',
+        created_at: s.created_at || s._created || 0,
+      }));
+  },
+
+  async createHolon(ws_id, patch) {
+    ensureWorkspaceSession(ws_id);
+    return ins(ws_id, 'holon', {
+      board_id: patch?.board_id || Store.activeBoard(ws_id),
+      name: patch?.name || 'Holon',
+      cardIds: Array.isArray(patch?.cardIds) ? patch.cardIds : [],
+      color: patch?.color || '',
+      created_at: Date.now(),
+      deleted: false,
+    });
+  },
+
+  async updateHolon(ws_id, id, patch) {
+    const allowed = ['name', 'cardIds', 'color'];
+    for (const k of Object.keys(patch || {})) {
+      if (!allowed.includes(k)) continue;
+      await def(ws_id, id, k, patch[k]);
+    }
+  },
+
+  async deleteHolon(ws_id, id) {
+    await def(ws_id, id, 'deleted', true);
+  },
+
+  listHolons(ws_id, board_id) {
+    if (!ws_id) return [];
+    ensureWorkspaceSession(ws_id);
+    const session = workspaceSessions.get(ws_id);
+    if (!session) return [];
+    const bid = board_id || Store.activeBoard(ws_id);
+    if (!bid) return [];
+    return entitiesOfType(session.state, 'holon')
+      .filter((h) => !h.deleted && (h.board_id || bid) === bid)
+      .map((h) => ({
+        id: h._anchor,
+        board_id: h.board_id,
+        name: h.name || 'Holon',
+        cardIds: Array.isArray(h.cardIds) ? h.cardIds : [],
+        color: h.color || '',
+        created_at: h.created_at || h._created || 0,
+      }));
+  },
+
+  // ── Search ──
+
+  searchSourcesInWorkspace(ws_id, query) {
+    if (!ws_id || !query) return [];
+    const q = String(query).toLowerCase().trim();
+    if (!q) return [];
+    const docs = Store.listDocuments(ws_id);
+    const results = [];
+    for (const d of docs) {
+      const sources = Store.listSources(d.id);
+      for (const s of sources) {
+        const hay = (s.title + ' ' + (s.filename || '') + ' ' + (s.description || '') + ' ' + (s.tags || []).join(' ') + ' ' + (s.source_url || '')).toLowerCase();
+        if (subsequenceMatch(hay, q)) {
+          results.push({
+            doc_id: d.id, doc_title: d.title,
+            source_id: s.source_id, source: s,
+          });
+        }
+      }
+    }
+    return results;
+  },
+
+  // ── Comments (Phase 5) ──
+  // Each comment is INS(comment, {anchor_id, quote, body, author, ts}).
+  // Replies are INS(comment_reply, {parent: comment_anchor, body, author,
+  // ts}) so a thread can grow without rewriting the whole array via DEF.
+
+  async createComment(doc_id, { anchor_id, quote, body }) {
+    const session = await ensureDocumentSession(doc_id);
+    void session;
+    const me = currentSession?.matrix_id || null;
+    return ins(doc_id, 'comment', {
+      anchor_id: anchor_id || null,
+      quote: quote || '',
+      body: body || '',
+      author: me,
+      ts: Date.now(),
+      resolved: false,
+      deleted: false,
+    });
+  },
+  async replyComment(doc_id, comment_id, body) {
+    const session = await ensureDocumentSession(doc_id);
+    void session;
+    const me = currentSession?.matrix_id || null;
+    return ins(doc_id, 'comment_reply', {
+      parent: comment_id,
+      body: body || '',
+      author: me,
+      ts: Date.now(),
+    });
+  },
+  async resolveComment(doc_id, comment_id, resolved) {
+    await def(doc_id, comment_id, 'resolved', !!resolved);
+  },
+  listComments(doc_id) {
+    const session = documentSessions.get(doc_id);
+    if (!session) return [];
+    const comments = entitiesOfType(session.state, 'comment')
+      .filter((c) => !c.deleted);
+    const replies = entitiesOfType(session.state, 'comment_reply');
+    const repliesByParent = {};
+    for (const r of replies) {
+      if (!r.parent) continue;
+      (repliesByParent[r.parent] = repliesByParent[r.parent] || []).push({
+        author: r.author || r._sender || null,
+        body: r.body || '',
+        ts: r.ts || r._created || 0,
+      });
+    }
+    return comments
+      .map((c) => {
+        const thread = [
+          { author: c.author || c._sender || null, body: c.body || '', ts: c.ts || c._created || 0 },
+          ...(repliesByParent[c._anchor] || []).sort((a, b) => a.ts - b.ts),
+        ];
+        return {
+          id: c._anchor,
+          anchor_id: c.anchor_id || null,
+          quote: c.quote || '',
+          thread,
+          resolved: !!c.resolved,
+          created_at: c._created || 0,
+        };
+      })
+      .sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
+  },
+
+  // ── Suggestions (tracked-change proposals) ──
+
+  async createSuggestion(doc_id, { anchor_id, original, proposed, note }) {
+    const session = await ensureDocumentSession(doc_id);
+    void session;
+    const me = currentSession?.matrix_id || null;
+    return ins(doc_id, 'suggestion', {
+      anchor_id: anchor_id || null,
+      original: original || '',
+      proposed: proposed || '',
+      note: note || '',
+      author: me,
+      status: 'pending',
+      created_at: Date.now(),
+      deleted: false,
+    });
+  },
+  async updateSuggestion(doc_id, sug_id, patch) {
+    const allowed = ['status', 'note', 'proposed'];
+    for (const k of Object.keys(patch || {})) {
+      if (!allowed.includes(k)) continue;
+      await def(doc_id, sug_id, k, patch[k]);
+    }
+  },
+  listSuggestions(doc_id) {
+    const session = documentSessions.get(doc_id);
+    if (!session) return [];
+    return entitiesOfType(session.state, 'suggestion')
+      .filter((s) => !s.deleted)
+      .map((s) => ({
+        id: s._anchor,
+        anchor_id: s.anchor_id || null,
+        original: s.original || '',
+        proposed: s.proposed || '',
+        note: s.note || '',
+        author: s.author || s._sender || null,
+        status: s.status || 'pending',
+        created_at: s.created_at || s._created || 0,
+      }))
+      .sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
+  },
 
   // ── Misc ──
 
@@ -509,16 +1063,109 @@ function workspaceCard(r) {
   };
 }
 
+// One-time flags so listBoards() doesn't fire the default-board INS
+// over and over when the corkboard re-renders during init.
+const autoseedFlags = Object.create(null);
+
+function boardCard(e) {
+  return {
+    id: e._anchor,
+    name: e.name || 'Board',
+    created_at: e.created_at || e._created || 0,
+  };
+}
+
+function evidenceCard(e) {
+  return {
+    id: e._anchor,
+    ws_id: null,                // corkboard doesn't read this back
+    board_id: e.board_id || null,
+    source_id: e.source_id || null,
+    doc_id: e.doc_id || null,
+    quote: e.quote || '',
+    note: e.note || '',
+    tags: Array.isArray(e.tags) ? e.tags : [],
+    color: e.color || 'amber',
+    x: e.x ?? 40, y: e.y ?? 40,
+    w: e.w ?? 220, h: e.h ?? 160,
+    created_at: e.created_at || e._created || 0,
+    author: e.author || null,
+  };
+}
+
+// Citation viewer's mime kind classification (matches the old shape).
+function _mimeKind(mime) {
+  if (!mime) return 'other';
+  if (mime === 'application/pdf') return 'pdf';
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('audio/')) return 'audio';
+  if (mime.startsWith('video/')) return 'video';
+  if (mime === 'text/html') return 'html';
+  if (mime.startsWith('text/') || mime.includes('csv')) return 'text';
+  return 'other';
+}
+
+// Subsequence match used by the workspace-wide source search.
+function subsequenceMatch(hay, needle) {
+  let i = 0;
+  for (let j = 0; j < hay.length && i < needle.length; j++) {
+    if (hay[j] === needle[i]) i++;
+  }
+  return i === needle.length;
+}
+
+function sourceCard(e) {
+  // Tolerate legacy field names from earlier slices (content_type, size,
+  // url, mxc_url) alongside the old DraftEO names. Old UI consumes the
+  // latter, so map them.
+  return {
+    source_id: e._anchor,
+    title: e.title || e.filename || e.source_url || e.url || 'Untitled',
+    filename: e.filename || null,
+    mime: e.mime || e.content_type || 'application/octet-stream',
+    size_bytes: e.size_bytes ?? e.size ?? 0,
+    uploaded_at: e.uploaded_at || e._created || Date.now(),
+    mxc_uri: e.mxc_uri || e.mxc_url || null,
+    encryption_info: e.encryption_info || null,
+    archive_org_url: e.archive_org_url || null,
+    archived_at: e.archived_at || null,
+    archive_org_identifier: e.archive_org_identifier || null,
+    archive_org_filename: e.archive_org_filename || null,
+    source_url: e.source_url || e.url || null,
+    description: e.description || '',
+    tags: Array.isArray(e.tags) ? e.tags : [],
+    hidden: !!e.hidden,
+  };
+}
+
+function exhibitCard(e) {
+  return {
+    id: e._anchor,
+    label: e.label || '',
+    text: e.text || '',
+    source_id: e.source_id || null,
+    doc_id: e.doc_id || null,
+    tags: Array.isArray(e.tags) ? e.tags : [],
+    created_at: e.created_at || e._created || Date.now(),
+  };
+}
+
 function documentCard(r, docEntity) {
   const body = docEntity?.body ?? '';
+  // Version = count of edit-log entries. The history scrubber uses this
+  // to label HEAD and to drive restoreToVersion(N).
+  const editCount = Array.isArray(docEntity?._evaluations)
+    ? docEntity._evaluations.filter((e) => e.criterion === 'edit').length
+    : 0;
   return {
     id: r.roomId,
     workspace_id: r.meta?.workspace_id || null,
     title: docEntity?.title || r.name || '(untitled)',
     dek: docEntity?.dek || '',
     body_markdown: body,
-    version: 0, // Phase 2: derive from edit log length
+    version: editCount + 1, // INS is v1; first edit moves us to v2
     stage: docEntity?.stage || 'drafting',
+    footnotes: docEntity?.footnotes || {},
     created_at: docEntity?._created || Date.now(),
     updated_at: docEntity?._updated || docEntity?._created || Date.now(),
   };
