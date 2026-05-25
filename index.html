@@ -369,6 +369,7 @@ button.ghost:hover { color:var(--accent); background:transparent; }
         <button class="tab active" data-mode="edit">Edit</button>
         <button class="tab" data-mode="preview">Preview</button>
         <button class="tab" data-mode="history">History</button>
+        <button id="exportBtn" class="tab" style="margin-left:auto" title="Export document">Export ↓</button>
       </div>
 
       <div class="editor-body">
@@ -423,6 +424,22 @@ button.ghost:hover { color:var(--accent); background:transparent; }
     <div class="key-display" id="recoveryKeyText"></div>
     <div class="btn-row" style="margin-top:0">
       <button class="primary" id="recoveryDisplayAck">I've saved it</button>
+    </div>
+  </div>
+</div>
+
+<div id="exportModal" class="modal-backdrop hidden">
+  <div class="modal" style="max-width:760px">
+    <h3>Export document</h3>
+    <div class="editor-tabs" style="margin:0 0 12px">
+      <button class="tab active" data-export-format="markdown">Markdown</button>
+      <button class="tab" data-export-format="html">HTML</button>
+    </div>
+    <textarea id="exportOutput" style="min-height:340px; font-family:var(--mono); font-size:12px; background:var(--bg); border:1px solid var(--border); padding:10px; width:100%; color:var(--text);"></textarea>
+    <div class="btn-row" style="margin-top:12px">
+      <button class="primary" id="exportCopyBtn">Copy</button>
+      <button id="exportDownloadBtn">Download</button>
+      <button id="exportCloseBtn" class="ghost">Close</button>
     </div>
   </div>
 </div>

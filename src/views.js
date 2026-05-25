@@ -25,6 +25,7 @@ import {
 } from './model.js';
 import { discoverRooms, onRoomChanges, acceptInvite } from './rooms.js';
 import { marked } from 'marked';
+import { exportMarkdown, exportHtml } from './export.js';
 
 marked.setOptions({ gfm: true, breaks: false });
 
@@ -503,6 +504,9 @@ export async function renderEditor(roomId, workspaceId, { onBack }) {
   bodyInput.onblur = () => setTimeout(() => hideSlashMenu(), 100);
   stageSelect.onchange = flush('stage');
 
+  // Export
+  $('exportBtn').onclick = () => openExportModal();
+
   // History UI handlers
   $('historyExitBtn').onclick = () => setMode('edit');
   $('historyRestoreBtn').onclick = async () => {
@@ -618,6 +622,29 @@ function renderSourceCard(roomId, s, deleted) {
       if (url) window.open(url, '_blank', 'noopener');
     };
     actions.appendChild(openBtn);
+  }
+
+  if (s.url && !s.archive_org_url) {
+    const archBtn = document.createElement('button');
+    archBtn.textContent = 'Archive';
+    archBtn.title = 'Open web.archive.org/save in a new tab, then paste the result back here';
+    archBtn.onclick = async () => {
+      const saveUrl = `https://web.archive.org/save/${encodeURI(s.url)}`;
+      window.open(saveUrl, '_blank', 'noopener');
+      const archived = prompt(
+        'After the Wayback Machine finishes saving, copy the resulting URL\n' +
+        '(it starts with https://web.archive.org/web/) and paste it here:',
+        ''
+      );
+      if (!archived) return;
+      try {
+        await updateSourceField(roomId, s._anchor, 'archive_org_url', archived.trim());
+        log('archive URL saved', 'ok');
+      } catch (e) {
+        log('save failed: ' + e.message, 'err');
+      }
+    };
+    actions.appendChild(archBtn);
   }
 
   const renameBtn = document.createElement('button');
@@ -897,6 +924,66 @@ function formatBytes(n) {
   if (n < 1024) return n + ' B';
   if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
   return (n / 1024 / 1024).toFixed(1) + ' MB';
+}
+
+// ── Export modal ──
+
+let exportFormat = 'markdown';
+
+function openExportModal() {
+  if (!editorSession) return;
+  exportFormat = 'markdown';
+  renderExport();
+  $('exportModal').classList.remove('hidden');
+
+  document.querySelectorAll('#exportModal .editor-tabs .tab').forEach((btn) => {
+    btn.onclick = () => {
+      exportFormat = btn.dataset.exportFormat;
+      document.querySelectorAll('#exportModal .editor-tabs .tab').forEach((b) => {
+        b.classList.toggle('active', b.dataset.exportFormat === exportFormat);
+      });
+      renderExport();
+    };
+  });
+
+  $('exportCloseBtn').onclick = () => $('exportModal').classList.add('hidden');
+  $('exportCopyBtn').onclick = async () => {
+    const text = $('exportOutput').value;
+    try {
+      await navigator.clipboard.writeText(text);
+      log('copied to clipboard', 'ok');
+    } catch (e) {
+      log('clipboard not available; select+copy from the textarea', 'err');
+    }
+  };
+  $('exportDownloadBtn').onclick = () => downloadExport();
+}
+
+function renderExport() {
+  const doc = findDocEntity(editorSession.state);
+  const body = doc?.body || '';
+  const meta = { title: doc?.title || 'Untitled', dek: doc?.dek || '' };
+  const sources = sourcesByAnchor(editorSession.state);
+  const out = exportFormat === 'markdown'
+    ? exportMarkdown(body, sources, meta)
+    : exportHtml(body, sources, meta);
+  $('exportOutput').value = out;
+}
+
+function downloadExport() {
+  const doc = findDocEntity(editorSession.state);
+  const title = (doc?.title || 'document').replace(/[^a-z0-9-_]+/gi, '_').slice(0, 60) || 'document';
+  const ext = exportFormat === 'markdown' ? 'md' : 'html';
+  const mime = exportFormat === 'markdown' ? 'text/markdown' : 'text/html';
+  const blob = new Blob([$('exportOutput').value], { type: mime + ';charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${title}.${ext}`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 // Render markdown to HTML, swapping {{cite:ID}} tokens for footnote refs.
