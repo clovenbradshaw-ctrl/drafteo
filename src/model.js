@@ -16,6 +16,7 @@ import {
 import { ins, def, con, getNamespace } from './operators.js';
 import { fold, foldFrom, initial, entitiesOfType } from './fold.js';
 import { EventStore } from './store.js';
+import { encryptAttachment, decryptAttachment } from 'matrix-encrypt-attachment';
 
 export const ENTITY = Object.freeze({
   DOCUMENT: 'document',
@@ -114,23 +115,27 @@ export function findDocEntity(state) {
 // ── Sources ──
 
 /**
- * Upload a file to the Matrix media repo and return its mxc:// URL.
+ * Encrypt a file and upload the ciphertext to the Matrix media repo.
  *
- * NOTE: this uploads via the standard media endpoint. The mxc URL is only
- * referenced from encrypted timeline events (the INS source event), so it
- * is not publicly discoverable, but the media bytes themselves are not
- * end-to-end encrypted yet. Per-file encrypted attachments are a follow-up.
+ * The plaintext never leaves the client. We upload AES-CTR ciphertext
+ * (matrix-encrypt-attachment's "v2" format) and return both the mxc URL
+ * and the encryption descriptor (key, iv, sha256 hash) that the
+ * receiving client needs to decrypt. Both halves are then stored in the
+ * encrypted INS source event — so an attacker who can read media but
+ * not the room timeline cannot decrypt the file.
  */
 export async function uploadFile(file) {
   const client = getClient();
   if (!client) throw new Error('Not connected');
-  const resp = await client.uploadContent(file, {
+  const plaintext = await file.arrayBuffer();
+  const { data: ciphertext, info } = await encryptAttachment(plaintext);
+  const blob = new Blob([ciphertext], { type: 'application/octet-stream' });
+  const resp = await client.uploadContent(blob, {
     name: file.name,
-    type: file.type || 'application/octet-stream',
+    type: 'application/octet-stream',
   });
-  // SDK returns either { content_uri } or just the string depending on version.
   const mxc = typeof resp === 'string' ? resp : (resp.content_uri || resp);
-  return mxc;
+  return { mxc, encryption_info: info };
 }
 
 /** Resolve mxc:// to a temporary http URL via the homeserver media proxy. */
@@ -138,6 +143,34 @@ export function mxcToHttp(mxc) {
   const client = getClient();
   if (!client || !mxc) return null;
   return client.mxcUrlToHttp(mxc);
+}
+
+/**
+ * Fetch a source's file and return an object URL the caller can open.
+ *
+ * If the source has encryption_info, the ciphertext is downloaded and
+ * decrypted client-side; the resulting blob URL has the original
+ * content_type so the browser renders it correctly. Legacy sources
+ * (no encryption_info) get the direct mxc → http URL.
+ *
+ * Caller owns the returned URL: revoke it with URL.revokeObjectURL when
+ * done.
+ */
+export async function openSourceObjectUrl(source) {
+  if (!source?.mxc_url) return null;
+  const httpUrl = mxcToHttp(source.mxc_url);
+  if (!httpUrl) return null;
+  if (!source.encryption_info) {
+    // Legacy unencrypted source — hand back the direct URL.
+    return { url: httpUrl, revoke: false };
+  }
+  const resp = await fetch(httpUrl);
+  if (!resp.ok) throw new Error(`download failed: HTTP ${resp.status}`);
+  const ciphertext = await resp.arrayBuffer();
+  const plaintext = await decryptAttachment(ciphertext, source.encryption_info);
+  const blob = new Blob([plaintext], { type: source.content_type || 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  return { url, revoke: true };
 }
 
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25 MB cap for now
@@ -154,11 +187,14 @@ export async function createSource(roomId, { file, url, title, description } = {
     throw new Error(`file too large (max ${(MAX_UPLOAD_BYTES / 1024 / 1024) | 0} MB)`);
   }
   let mxc = null;
+  let encryptionInfo = null;
   let filename = null;
   let contentType = null;
   let size = null;
   if (file) {
-    mxc = await uploadFile(file);
+    const upload = await uploadFile(file);
+    mxc = upload.mxc;
+    encryptionInfo = upload.encryption_info;
     filename = file.name;
     contentType = file.type || 'application/octet-stream';
     size = file.size;
@@ -169,6 +205,7 @@ export async function createSource(roomId, { file, url, title, description } = {
     content_type: contentType,
     size,
     mxc_url: mxc,
+    encryption_info: encryptionInfo,
     url: url || null,
     description: description || null,
     deleted: false,
