@@ -1,19 +1,20 @@
 {
-  "name": "drafteo",
-  "private": true,
+  "name": "matrix-events",
   "version": "0.1.0",
+  "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"
   },
-  "devDependencies": {
-    "vite": "^5.4.10",
-    "vite-plugin-node-polyfills": "^0.22.0"
-  },
   "dependencies": {
-    "matrix-js-sdk": "^34.13.0",
-    "@matrix-org/olm": "^3.2.15"
+    "marked": "^18.0.4",
+    "matrix-js-sdk": "^41.5.0"
+  },
+  "devDependencies": {
+    "vite": "^6.3.5",
+    "vite-plugin-top-level-await": "^1.5.0",
+    "vite-plugin-wasm": "^3.4.1"
   }
 }
