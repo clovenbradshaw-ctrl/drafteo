@@ -1,37 +1,111 @@
-<!doctype html>
-<html lang="en" data-theme="dark">
+<!DOCTYPE html>
+<html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>DraftEO</title>
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Courier+Prime:ital,wght@0,400;0,700;1,400&family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,400;1,9..144,500&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css" />
-<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css" />
-<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css" />
-<link rel="stylesheet" href="styles.css" />
-<link rel="stylesheet" href="theme.css" />
-<link rel="stylesheet" href="editor.css" />
-<link rel="stylesheet" href="corkboard.css" />
-<link rel="stylesheet" href="srcviewer.css" />
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Matrix Events</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Fraunces:opsz,wght@9..144,300;9..144,500;9..144,700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0a0a0c;--surface:#111115;--surface-2:#1a1a20;--border:#2a2a32;--text:#e0ddd8;--text-dim:#7a7872;--text-bright:#f5f2ed;--accent:#c4956a;--accent-dim:#8a6a4a;--accent-glow:rgba(196,149,106,.15);--green:#6a9a6a;--green-dim:rgba(106,154,106,.15);--red:#b06060;--mono:'IBM Plex Mono',monospace;--serif:'Fraunces',serif;--radius:3px}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:var(--mono);background:var(--bg);color:var(--text);min-height:100vh;font-size:13px;line-height:1.6}
+.app{max-width:720px;margin:0 auto;padding:24px 20px}
+.header{display:flex;align-items:baseline;gap:12px;padding-bottom:16px;border-bottom:1px solid var(--border);margin-bottom:20px}
+.header h1{font-family:var(--serif);font-weight:700;font-size:20px;color:var(--accent)}
+.header .tag{font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-dim)}
+.field{margin-bottom:12px}
+.field label{display:block;font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-dim);margin-bottom:4px}
+input{width:100%;padding:8px 10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-family:var(--mono);font-size:13px;outline:none}
+input:focus{border-color:var(--accent-dim);box-shadow:0 0 0 2px var(--accent-glow)}
+button{padding:7px 16px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-family:var(--mono);font-size:12px;cursor:pointer}
+button:hover{border-color:var(--accent-dim);background:var(--accent-glow);color:var(--text-bright)}
+button.primary{background:var(--accent-dim);border-color:var(--accent);color:var(--text-bright)}
+.btn-row{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:16px}
+.panel h2{font-family:var(--serif);font-weight:500;font-size:15px;color:var(--accent);margin-bottom:14px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+#log{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;max-height:160px;overflow-y:auto;font-size:11px;line-height:1.7;color:var(--text-dim);margin-bottom:16px}
+#log .ok{color:var(--green)}
+#log .err{color:var(--red)}
+.room-item{padding:8px 10px;border-bottom:1px solid var(--border);cursor:pointer;font-size:12px}
+.room-item:hover{background:var(--accent-glow)}
+.room-item.active{background:var(--accent-glow);border-left:2px solid var(--accent)}
+#stateView{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:10px;font-size:11px;max-height:400px;overflow:auto;white-space:pre-wrap;word-break:break-all;color:var(--text-dim)}
+.hidden{display:none!important}
+.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:100}
+.modal{background:var(--surface);border:1px solid var(--accent-dim);border-radius:var(--radius);padding:24px;max-width:520px;width:90%}
+.modal h3{font-family:var(--serif);font-size:16px;color:var(--accent);margin-bottom:12px}
+.modal p{font-size:12px;color:var(--text-dim);margin-bottom:14px;line-height:1.7}
+.modal .key-display{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:12px;font-size:13px;color:var(--accent);word-break:break-all;margin-bottom:14px;user-select:all}
+</style>
 </head>
 <body>
-<div id="root"></div>
-
-<script>
-// Apply persisted theme synchronously, before any render, to avoid flash
-(function () {
-  try {
-    var t = localStorage.getItem('drafteo.theme');
-    if (!t || (t !== 'light' && t !== 'dark')) {
-      t = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
-    }
-    document.documentElement.dataset.theme = t;
-  } catch (_) {}
-})();
-</script>
-
+<div class="app">
+  <div class="header">
+    <h1>Matrix Events</h1>
+    <span class="tag">rooms as database · operators as schema · fold as query</span>
+  </div>
+  <div id="log"></div>
+  <div id="authPanel" class="panel">
+    <h2>Connect</h2>
+    <div class="field"><label>Username</label><input id="inUser" placeholder="@user:homeserver.com" oninput="
+      const v=this.value.trim();
+      document.getElementById('hsField').classList.toggle('hidden',v.includes(':'));
+      if(v.includes(':'))document.getElementById('inHS').value='https://'+v.split(':').slice(1).join(':');
+    "></div>
+    <div class="field"><label>Password</label><input id="inPass" type="password"></div>
+    <div class="field" id="hsField"><label>Homeserver</label><input id="inHS" placeholder="https://matrix.org"></div>
+    <div class="btn-row"><button class="primary" id="loginBtn">Login</button></div>
+  </div>
+  <div id="appPanel" class="hidden">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <span id="userDisplay" style="color:var(--accent);font-size:12px"></span>
+      <button id="logoutBtn" style="font-size:11px">Logout</button>
+    </div>
+    <div class="panel">
+      <h2>Rooms</h2>
+      <div id="roomList" style="margin-bottom:12px"></div>
+      <div style="display:flex;gap:8px">
+        <input id="newRoomName" placeholder="Room name" style="flex:1">
+        <input id="newRoomType" placeholder="Type" style="width:100px">
+        <button id="createRoomBtn">Create</button>
+      </div>
+    </div>
+    <div class="panel hidden" id="roomControls">
+      <h2 id="currentRoomName">—</h2>
+      <div style="font-size:11px;color:var(--text-dim);margin-bottom:10px">Members: <span id="memberList">—</span></div>
+      <div class="btn-row" style="margin-top:0">
+        <button id="emitInsBtn">+ INS (create entity)</button>
+        <button id="emitDefBtn">⊢ DEF (set value)</button>
+        <button id="inviteBtn">⋈ Invite user</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Projected State (integral fold)</h2>
+      <pre id="stateView" style="min-height:60px">{ }</pre>
+    </div>
+  </div>
+</div>
+<div id="recoveryDisplayModal" class="modal-backdrop hidden">
+  <div class="modal">
+    <h3>Save your recovery key</h3>
+    <p>This key restores your message history on new browsers and devices. Save it somewhere safe — it cannot be shown again.</p>
+    <div class="key-display" id="recoveryKeyText"></div>
+    <div class="btn-row" style="margin-top:0">
+      <button class="primary" id="recoveryDisplayAck">I've saved it</button>
+    </div>
+  </div>
+</div>
+<div id="recoveryEntryModal" class="modal-backdrop hidden">
+  <div class="modal">
+    <h3>Enter your recovery key</h3>
+    <p>This device is new. Paste the recovery key from your first login to decrypt prior messages.</p>
+    <div class="field"><input id="recoveryKeyInput" placeholder="EsTb …" autocomplete="off"></div>
+    <div class="btn-row" style="margin-top:0">
+      <button class="primary" id="recoveryEntrySubmit">Unlock</button>
+      <button id="recoveryEntrySkip">Skip</button>
+    </div>
+  </div>
+</div>
 <script type="module" src="/src/main.js"></script>
 </body>
 </html>
