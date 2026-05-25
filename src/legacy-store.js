@@ -32,7 +32,7 @@ import {
   setRecoveryKeyDisplayer,
   setRecoveryKeyProvider,
 } from './client.js';
-import { setNamespace, getNamespace, ins, def } from './operators.js';
+import { setNamespace, getNamespace, ins, def, eva } from './operators.js';
 import { initial, fold, foldFrom, entitiesOfType } from './fold.js';
 import {
   createRoom, discoverRooms, getMembers, invite as inviteUser,
@@ -40,7 +40,7 @@ import {
 } from './rooms.js';
 import { EventStore } from './store.js';
 import {
-  RoomSession, findDocEntity,
+  RoomSession, findDocEntity, replayDocAt,
   ROOM_TYPE, ENTITY, STAGES,
 } from './model.js';
 
@@ -121,6 +121,9 @@ export const Store = {
   ready() { return readyPromise; },
 
   session() { return currentSession; },
+
+  /** Document lifecycle stages used by the editor's stage pill. */
+  STAGES,
 
   normalizeMatrixId(id) {
     if (!id) return null;
@@ -232,6 +235,16 @@ export const Store = {
   listDocuments(ws_id) {
     if (!ws_id) return [];
     const rooms = discoverRooms(ROOM_TYPE.DOCUMENT).filter((r) => r.meta?.workspace_id === ws_id);
+    // Eagerly warm up sessions in the background so subsequent
+    // getDocument() calls (which are sync) have the full fold available
+    // by the time the user clicks into a doc.
+    for (const r of rooms) {
+      if (!documentSessions.has(r.roomId)) {
+        ensureDocumentSession(r.roomId).catch((e) =>
+          console.warn('[store-shim] doc session warm-up failed', e)
+        );
+      }
+    }
     return rooms.map((r) => documentCard(r, getDocEntityFromSession(r.roomId)));
   },
 
@@ -257,7 +270,6 @@ export const Store = {
   },
 
   async saveDocument(doc_id, patch, editEntry) {
-    void editEntry; // Phase 2: edit log entry
     const session = await ensureDocumentSession(doc_id);
     const doc = findDocEntity(session.state);
     if (!doc) throw new Error('document not yet loaded');
@@ -274,7 +286,117 @@ export const Store = {
     if (patch.stage != null && STAGES.includes(patch.stage)) {
       await def(doc_id, doc._anchor, 'stage', patch.stage);
     }
+    // Edit-log entry: the editor classifies the diff (DEF/INS/DES/SEG/CON/ROL)
+    // and hands us a payload. We persist it as an EVA event keyed by the
+    // 'edit' criterion so the fold lifts it onto entity._evaluations and we
+    // can later derive a version log + restore points from it.
+    if (editEntry && editEntry.op) {
+      try {
+        await eva(doc_id, doc._anchor, 'edit', String(editEntry.op),
+          JSON.stringify({
+            resolution: editEntry.resolution || '',
+            site: editEntry.site || '',
+            note: editEntry.note || '',
+          })
+        );
+      } catch (e) {
+        console.warn('[store-shim] edit-log EVA failed', e);
+      }
+    }
     return Store.getDocument(doc_id);
+  },
+
+  async setStage(doc_id, stage) {
+    if (!STAGES.includes(stage)) throw new Error(`unknown stage: ${stage}`);
+    return Store.saveDocument(doc_id, { stage });
+  },
+
+  /**
+   * Pinned checkpoint — stored as an EVA(criterion='checkpoint') with the
+   * given name as the note. The body at the checkpoint's timestamp is
+   * what restore would replay to.
+   */
+  async createCheckpoint(doc_id, name) {
+    const session = await ensureDocumentSession(doc_id);
+    const doc = findDocEntity(session.state);
+    if (!doc) throw new Error('document not yet loaded');
+    await eva(doc_id, doc._anchor, 'checkpoint', 'pinned',
+      JSON.stringify({ name: String(name || 'Untitled').trim() })
+    );
+    return Store.getDocument(doc_id);
+  },
+
+  /** Append-only edit log derived from the document entity's _evaluations. */
+  getEditLog(doc_id) {
+    const session = documentSessions.get(doc_id);
+    if (!session) return [];
+    const doc = findDocEntity(session.state);
+    if (!doc || !Array.isArray(doc._evaluations)) return [];
+    const entries = doc._evaluations.filter((e) => e.criterion === 'edit');
+    return entries.map((e, i) => {
+      let extra = {};
+      try { extra = JSON.parse(e.note || '{}'); } catch (_) {}
+      return {
+        version: i + 1,
+        ts: e._ts,
+        op: e.result,
+        resolution: extra.resolution || '',
+        site: extra.site || '',
+        note: extra.note || '',
+        sender: e._sender || null,
+      };
+    });
+  },
+
+  /** Body text at a given version (1-indexed). v=0 returns the initial INS body. */
+  async getSnapshot(doc_id, version) {
+    const log = Store.getEditLog(doc_id);
+    if (!log.length) {
+      const d = Store.getDocument(doc_id);
+      return d ? d.body_markdown || '' : '';
+    }
+    const idx = Math.max(0, Math.min(log.length, Number(version) || 0));
+    if (idx === 0) {
+      // Initial body: replay up to just before the first edit entry.
+      const session = documentSessions.get(doc_id);
+      if (!session) return '';
+      const body = await replayDocAt(session, log[0].ts - 1);
+      return body || '';
+    }
+    const target = log[idx - 1];
+    const session = documentSessions.get(doc_id);
+    if (!session) return '';
+    return (await replayDocAt(session, target.ts)) || '';
+  },
+
+  /**
+   * Restore a prior version: replay the body at the target version's ts,
+   * emit a new DEF(body) carrying that text + an EVA(criterion='edit',
+   * op='ROL') so the history surfaces the rollback as its own entry.
+   */
+  async restoreToVersion(doc_id, version) {
+    const body = await Store.getSnapshot(doc_id, version);
+    const session = documentSessions.get(doc_id);
+    if (!session) throw new Error('document session not ready');
+    const doc = findDocEntity(session.state);
+    if (!doc) throw new Error('document not yet loaded');
+    await def(doc_id, doc._anchor, 'body', body);
+    try {
+      await eva(doc_id, doc._anchor, 'edit', 'ROL',
+        JSON.stringify({ resolution: `Restored to version ${version}`, site: 'whole doc' })
+      );
+    } catch (_) {}
+    return Store.getDocument(doc_id);
+  },
+
+  /**
+   * URL for a citation footnote. Phase 3 wires the real archive.org URL;
+   * for now we hand back whatever URL is on the source (if any) or null.
+   */
+  buildCitationUrl(source, footnote) {
+    void footnote;
+    if (!source) return null;
+    return source.archive_org_url || source.url || null;
   },
 
   async deleteDocument(doc_id) {
@@ -307,6 +429,17 @@ export const Store = {
   async deleteExhibit() { throw new Error('Exhibits will be wired in Phase 4'); },
 
   listEvidence(ws_id) { void ws_id; return []; },
+
+  // Comments + suggestions (Phase 5). Editor renders empty panels with
+  // these returning []; mutators announce when they're touched so we
+  // surface misuse early.
+  listComments(doc_id) { void doc_id; return []; },
+  listSuggestions(doc_id) { void doc_id; return []; },
+  async createComment()    { throw new Error('Comments arrive in Phase 5'); },
+  async replyComment()     { throw new Error('Comments arrive in Phase 5'); },
+  async resolveComment()   { throw new Error('Comments arrive in Phase 5'); },
+  async createSuggestion() { throw new Error('Suggestions arrive in Phase 5'); },
+  async updateSuggestion() { throw new Error('Suggestions arrive in Phase 5'); },
 
   // ── Misc ──
 

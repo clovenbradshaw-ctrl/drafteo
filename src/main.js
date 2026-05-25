@@ -24,7 +24,11 @@ import './legacy-store.js';
 import './stubs.js';
 
 import './dom.js';
+import './eo.js';
+import './markdown.js';
 import './login.js';
+import './history.js';
+import './editor.js';
 import './projects.js';
 import './workspace.js';
 import './app.js';

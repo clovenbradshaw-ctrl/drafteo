@@ -5,13 +5,10 @@
  * (window.EditorView, window.Corkboard, window.SourceViewer, etc.) and
  * workspace.js / projects.js reach into those globals to mount features.
  *
- * Phase 1 only restores the shell + login + workspaces + document
- * creation. Editor, sources, corkboard, history, etc. arrive in later
- * phases. Until then, these stubs satisfy the import surface so
- * workspace.js doesn't crash when a user clicks into an empty doc or
- * the corkboard.
- *
- * Replace each stub with a real implementation as later phases land.
+ * Phase 1 restored the shell + login + workspaces.
+ * Phase 2 restored editor.js + history.js (EditorView + HistoryBar).
+ * Phases 3–4 will restore source-related and corkboard modules; until
+ * then these stubs satisfy the import surface so clicks don't crash.
  */
 
 (function () {
@@ -23,22 +20,6 @@
       '<div>' + hint + '</div>';
     return el;
   }
-
-  // EditorView.mountInto(content, ws_id, doc_id, app, opts) — returns an
-  // object with an `unmount()` method. workspace.js calls this to mount
-  // the editor for the active doc.
-  window.EditorView = window.EditorView || {
-    mountInto(content, ws_id, doc_id, app, _opts) {
-      void ws_id; void app;
-      const view = placeholder(
-        'Document editor — Phase 2',
-        'The rich editor (markdown, slash menu, suggest/comment modes, edit history) lands in Phase 2. Document ID: ' + (doc_id || '—')
-      );
-      while (content.firstChild) content.removeChild(content.firstChild);
-      content.appendChild(view);
-      return { unmount() { view.remove(); } };
-    },
-  };
 
   // Corkboard.open(ws_id, app) — returns an Element.
   window.Corkboard = window.Corkboard || {
@@ -61,11 +42,8 @@
   };
 
   // Other helpers some old modules call into.
-  window.HistoryView = window.HistoryView || { open() { return placeholder('History — Phase 2', ''); } };
   window.Sources = window.Sources || {};
   window.Exporter = window.Exporter || {};
-  window.Markdown = window.Markdown || { render: (s) => String(s || '') };
-  window.EO = window.EO || {};
 
   // Crypto self-test indicator surfaced in the titlebar. Until we wire
   // the real Megolm self-test in, claim verified — the bare-metal client
