@@ -15,6 +15,8 @@ import {
   getRoomName, getRoomMembers, inviteToRoom,
   RoomSession, findDocEntity, saveDocTitle, saveDocBody, saveDocStage,
   getBodyHistory, replayDocAt,
+  createSource, deleteSource, restoreSource, updateSourceField,
+  listSources, listDeletedSources, sourcesByAnchor, mxcToHttp,
   STAGES, ROOM_TYPE,
 } from './model.js';
 import { discoverRooms, onRoomChanges, acceptInvite } from './rooms.js';
@@ -306,11 +308,37 @@ export async function renderEditor(roomId, workspaceId, { onBack }) {
     }
     status.textContent = 'saved';
     paintMembers('docMembers', roomId);
-    if (currentMode === 'preview') renderPreviewBody(bodyInput.value);
+    paintSources(roomId, state);
+    if (currentMode === 'preview') renderPreviewBody(bodyInput.value, sourcesByAnchor(state));
   };
 
   applyState(editorSession.state);
   editorUnsub = editorSession.onUpdate(applyState);
+
+  // Source pane controls
+  $('sourceFile').onchange = async (ev) => {
+    const file = ev.target.files?.[0];
+    if (!file) return;
+    try {
+      log(`uploading ${file.name}…`);
+      await createSource(roomId, { file });
+      log(`source added`, 'ok');
+    } catch (e) {
+      log('upload failed: ' + e.message, 'err');
+    }
+    ev.target.value = '';
+  };
+  $('addUrlBtn').onclick = async () => {
+    const url = $('sourceUrl').value.trim();
+    if (!url) return;
+    try {
+      await createSource(roomId, { url, title: url });
+      $('sourceUrl').value = '';
+      log('url source added', 'ok');
+    } catch (e) {
+      log('add failed: ' + e.message, 'err');
+    }
+  };
 
   // ── Save handlers (debounced) ──
   const flush = (kind) => async () => {
@@ -399,15 +427,118 @@ async function setMode(mode) {
   $('editorHistory').classList.toggle('hidden', mode !== 'history');
 
   if (mode === 'preview') {
-    renderPreviewBody($('docBody').value);
+    const map = editorSession ? sourcesByAnchor(editorSession.state) : {};
+    renderPreviewBody($('docBody').value, map);
   } else if (mode === 'history') {
     await loadHistory();
   }
 }
 
-function renderPreviewBody(markdown) {
-  const html = renderMarkdownWithCitations(markdown || '');
+function renderPreviewBody(markdown, sourcesMap = {}) {
+  const html = renderMarkdownWithCitations(markdown || '', sourcesMap);
   $('previewBody').innerHTML = html;
+}
+
+// ── Source pane rendering ──
+
+function paintSources(roomId, state) {
+  const live = listSources(state);
+  const dead = listDeletedSources(state);
+  const liveEl = $('sourceList');
+  const deadEl = $('sourceTrash');
+  liveEl.innerHTML = '';
+  deadEl.innerHTML = '';
+
+  if (live.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.style.padding = '6px 0';
+    empty.textContent = 'No sources yet.';
+    liveEl.appendChild(empty);
+  } else {
+    for (const s of live) liveEl.appendChild(renderSourceCard(roomId, s, false));
+  }
+  for (const s of dead) deadEl.appendChild(renderSourceCard(roomId, s, true));
+}
+
+function renderSourceCard(roomId, s, deleted) {
+  const card = document.createElement('div');
+  card.className = 'source-card';
+  const meta = [];
+  if (s.filename) meta.push(escapeHtml(s.filename));
+  if (s.size) meta.push(formatBytes(s.size));
+  if (s.url) meta.push(`<a href="${escapeHtml(s.url)}" target="_blank" rel="noopener">link</a>`);
+  if (s.archive_org_url) meta.push(`<a href="${escapeHtml(s.archive_org_url)}" target="_blank" rel="noopener">archive</a>`);
+  card.innerHTML = `
+    <div class="title">${escapeHtml(s.title || 'Untitled')}</div>
+    <div class="meta">${meta.join(' · ') || '—'}</div>
+    <div class="actions"></div>
+  `;
+  const actions = card.querySelector('.actions');
+
+  const citeBtn = document.createElement('button');
+  citeBtn.textContent = 'Insert cite';
+  citeBtn.title = 'Insert citation token at cursor';
+  citeBtn.onclick = () => insertCiteAtCursor(s._anchor);
+  actions.appendChild(citeBtn);
+
+  if (s.mxc_url) {
+    const openBtn = document.createElement('button');
+    openBtn.textContent = 'Open';
+    openBtn.onclick = () => {
+      const url = mxcToHttp(s.mxc_url);
+      if (url) window.open(url, '_blank', 'noopener');
+    };
+    actions.appendChild(openBtn);
+  }
+
+  const renameBtn = document.createElement('button');
+  renameBtn.textContent = 'Rename';
+  renameBtn.onclick = async () => {
+    const t = prompt('Title:', s.title || '');
+    if (t == null) return;
+    try { await updateSourceField(roomId, s._anchor, 'title', t.trim()); }
+    catch (e) { log('rename failed: ' + e.message, 'err'); }
+  };
+  actions.appendChild(renameBtn);
+
+  if (deleted) {
+    const restoreBtn = document.createElement('button');
+    restoreBtn.textContent = 'Restore';
+    restoreBtn.onclick = async () => {
+      try { await restoreSource(roomId, s._anchor); }
+      catch (e) { log('restore failed: ' + e.message, 'err'); }
+    };
+    actions.appendChild(restoreBtn);
+  } else {
+    const trashBtn = document.createElement('button');
+    trashBtn.textContent = 'Trash';
+    trashBtn.onclick = async () => {
+      try { await deleteSource(roomId, s._anchor); }
+      catch (e) { log('trash failed: ' + e.message, 'err'); }
+    };
+    actions.appendChild(trashBtn);
+  }
+  return card;
+}
+
+function insertCiteAtCursor(anchor) {
+  const ta = $('docBody');
+  const token = `{{cite:${anchor}}}`;
+  const start = ta.selectionStart ?? ta.value.length;
+  const end = ta.selectionEnd ?? ta.value.length;
+  ta.value = ta.value.slice(0, start) + token + ta.value.slice(end);
+  const caret = start + token.length;
+  ta.setSelectionRange(caret, caret);
+  ta.focus();
+  ta.dispatchEvent(new Event('input'));
+}
+
+function formatBytes(n) {
+  if (!n && n !== 0) return '';
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1024 / 1024).toFixed(1) + ' MB';
 }
 
 // Render markdown to HTML, swapping {{cite:ID}} tokens for footnote refs.
@@ -571,7 +702,8 @@ async function showHistoryAt(idx) {
   // Replay fold up to this entry's ts so the preview matches what fold would
   // have produced (handles deletes, body restores, etc.).
   const body = await replayDocAt(editorSession, entry.ts);
-  $('historyPreview').innerHTML = renderMarkdownWithCitations(body || '');
+  const map = sourcesByAnchor(editorSession.state);
+  $('historyPreview').innerHTML = renderMarkdownWithCitations(body || '', map);
   $('historyRestoreBtn').disabled = isLatest;
 }
 

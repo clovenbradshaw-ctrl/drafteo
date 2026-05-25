@@ -19,6 +19,7 @@ import { EventStore } from './store.js';
 
 export const ENTITY = Object.freeze({
   DOCUMENT: 'document',
+  SOURCE: 'source',
 });
 
 export const ROOM_TYPE = Object.freeze({
@@ -89,6 +90,111 @@ export function findDocEntity(state) {
   const docs = entitiesOfType(state, ENTITY.DOCUMENT);
   if (docs.length === 0) return null;
   return docs.reduce((a, b) => (a._created <= b._created ? a : b));
+}
+
+// ── Sources ──
+
+/**
+ * Upload a file to the Matrix media repo and return its mxc:// URL.
+ *
+ * NOTE: this uploads via the standard media endpoint. The mxc URL is only
+ * referenced from encrypted timeline events (the INS source event), so it
+ * is not publicly discoverable, but the media bytes themselves are not
+ * end-to-end encrypted yet. Per-file encrypted attachments are a follow-up.
+ */
+export async function uploadFile(file) {
+  const client = getClient();
+  if (!client) throw new Error('Not connected');
+  const resp = await client.uploadContent(file, {
+    name: file.name,
+    type: file.type || 'application/octet-stream',
+  });
+  // SDK returns either { content_uri } or just the string depending on version.
+  const mxc = typeof resp === 'string' ? resp : (resp.content_uri || resp);
+  return mxc;
+}
+
+/** Resolve mxc:// to a temporary http URL via the homeserver media proxy. */
+export function mxcToHttp(mxc) {
+  const client = getClient();
+  if (!client || !mxc) return null;
+  return client.mxcUrlToHttp(mxc);
+}
+
+export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25 MB cap for now
+
+/**
+ * Create a source attached to the current document room.
+ *
+ * Accepts either { file } (uploads first) or { url } (no upload).
+ * Optional: title, description.
+ */
+export async function createSource(roomId, { file, url, title, description } = {}) {
+  if (!file && !url) throw new Error('source needs either a file or a url');
+  if (file && file.size > MAX_UPLOAD_BYTES) {
+    throw new Error(`file too large (max ${(MAX_UPLOAD_BYTES / 1024 / 1024) | 0} MB)`);
+  }
+  let mxc = null;
+  let filename = null;
+  let contentType = null;
+  let size = null;
+  if (file) {
+    mxc = await uploadFile(file);
+    filename = file.name;
+    contentType = file.type || 'application/octet-stream';
+    size = file.size;
+  }
+  const payload = {
+    title: (title || filename || url || 'Untitled source').trim(),
+    filename,
+    content_type: contentType,
+    size,
+    mxc_url: mxc,
+    url: url || null,
+    description: description || null,
+    deleted: false,
+  };
+  return ins(roomId, ENTITY.SOURCE, payload);
+}
+
+/** Soft-delete a source via DEF (tombstone). Nothing is destroyed. */
+export async function deleteSource(roomId, anchor) {
+  return def(roomId, anchor, 'deleted', true);
+}
+
+/** Undelete (restore from bin). */
+export async function restoreSource(roomId, anchor) {
+  return def(roomId, anchor, 'deleted', false);
+}
+
+/** Update a source field (title / description / archive_org_url). */
+export async function updateSourceField(roomId, anchor, field, value) {
+  const allowed = ['title', 'description', 'archive_org_url'];
+  if (!allowed.includes(field)) throw new Error(`field not editable: ${field}`);
+  return def(roomId, anchor, field, value);
+}
+
+/** Live sources for a folded state: not-deleted, ordered by creation. */
+export function listSources(state) {
+  return entitiesOfType(state, ENTITY.SOURCE)
+    .filter((s) => !s.deleted)
+    .sort((a, b) => (a._created || 0) - (b._created || 0));
+}
+
+/** Sources marked deleted — surfaced as "Trash". */
+export function listDeletedSources(state) {
+  return entitiesOfType(state, ENTITY.SOURCE)
+    .filter((s) => s.deleted)
+    .sort((a, b) => (b._updated || 0) - (a._updated || 0));
+}
+
+/** Map source-anchor → source entity, for citation resolution. */
+export function sourcesByAnchor(state) {
+  const map = {};
+  for (const s of entitiesOfType(state, ENTITY.SOURCE)) {
+    map[s._anchor] = s;
+  }
+  return map;
 }
 
 // ── History / replay ──

@@ -94,6 +94,27 @@ button.ghost:hover { color:var(--accent); background:transparent; }
   padding:14px 16px; line-height:1.7; font-size:14px; resize:vertical;
 }
 
+/* Editor edit layout: body + sources pane */
+.editor-edit-layout { display:grid; grid-template-columns: 1fr 260px; gap:16px; }
+.editor-edit-main { position:relative; min-width:0; }
+.sources-pane { background:var(--bg); border:1px solid var(--border); border-radius:var(--radius); padding:12px; font-size:11px; }
+.sources-pane h3 { font-family:var(--serif); font-weight:500; font-size:12px; color:var(--text-bright); text-transform:uppercase; letter-spacing:1.2px; margin-bottom:10px; }
+.sources-add { display:flex; flex-direction:column; gap:8px; margin-bottom:10px; }
+.file-pick { display:block; cursor:pointer; padding:6px 8px; border:1px dashed var(--border); border-radius:var(--radius); text-align:center; color:var(--text-dim); font-size:11px; }
+.file-pick:hover { border-color:var(--accent-dim); color:var(--accent); }
+.file-pick input[type=file] { display:none; }
+.url-add { display:flex; gap:4px; }
+.url-add input { padding:5px 7px; font-size:11px; }
+.source-list { display:flex; flex-direction:column; gap:8px; }
+.source-card { padding:8px; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius); }
+.source-card .title { color:var(--text-bright); font-size:12px; margin-bottom:3px; word-break:break-word; }
+.source-card .meta { font-size:10px; color:var(--text-dim); margin-bottom:6px; }
+.source-card .actions { display:flex; gap:4px; flex-wrap:wrap; }
+.source-card .actions button { padding:3px 6px; font-size:10px; }
+.source-trash { margin-top:14px; font-size:10px; }
+.source-trash summary { color:var(--text-dim); cursor:pointer; padding:4px 0; }
+.source-list--trash .source-card { opacity:.7; }
+
 /* Editor tabs */
 .editor-tabs { display:flex; gap:4px; margin:14px 0 10px; border-bottom:1px solid var(--border); }
 .editor-tabs .tab {
@@ -255,9 +276,29 @@ button.ghost:hover { color:var(--accent); background:transparent; }
       </div>
 
       <div class="editor-body">
-        <div id="editorEdit" class="editor-mode">
-          <textarea id="docBody" class="body-input" placeholder="Start writing…  (type / for blocks)"></textarea>
-          <div id="slashMenu" class="slash-menu hidden"></div>
+        <div id="editorEdit" class="editor-mode editor-edit-layout">
+          <div class="editor-edit-main">
+            <textarea id="docBody" class="body-input" placeholder="Start writing…  (type / for blocks)"></textarea>
+            <div id="slashMenu" class="slash-menu hidden"></div>
+          </div>
+          <aside class="sources-pane">
+            <h3>Sources</h3>
+            <div class="sources-add">
+              <label class="file-pick">
+                <input id="sourceFile" type="file">
+                <span>+ Upload file</span>
+              </label>
+              <div class="url-add">
+                <input id="sourceUrl" placeholder="https:// URL">
+                <button id="addUrlBtn" class="ghost">+ URL</button>
+              </div>
+            </div>
+            <div id="sourceList" class="source-list"></div>
+            <details class="source-trash">
+              <summary>Trash</summary>
+              <div id="sourceTrash" class="source-list source-list--trash"></div>
+            </details>
+          </aside>
         </div>
         <div id="editorPreview" class="editor-mode hidden">
           <article id="previewBody" class="preview"></article>
