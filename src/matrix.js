@@ -360,6 +360,67 @@ export async function sendEncrypted(roomId, type, content) {
   return client.sendEvent(roomId, type, content);
 }
 
+// Upload a Blob/File to the homeserver media repo. Returns the mxc:// URI.
+// NOTE: this writes the binary in plaintext to the homeserver — the bytes
+// are NOT E2EE. Encrypting attachments (m.file scheme with AES-CTR key in
+// the timeline event) is the right next step; for now the source meta
+// IS encrypted in the timeline event, just not the binary.
+export async function uploadMedia(blob, opts) {
+  const client = state.client;
+  if (!client) throw new Error('Matrix client not ready.');
+  const res = await client.uploadContent(blob, {
+    name: (opts && opts.name) || undefined,
+    type: (opts && opts.type) || (blob && blob.type) || 'application/octet-stream',
+    progressHandler: (opts && opts.progressHandler) || undefined,
+  });
+  return res && res.content_uri;
+}
+
+// Fetch a Matrix mxc:// binary as a Blob. Tries authenticated download
+// first (Matrix 1.11+ requires it), falls back to legacy unauthenticated.
+export async function downloadMedia(mxc) {
+  const client = state.client;
+  if (!client || !mxc || !mxc.startsWith('mxc://')) return null;
+  // Try authenticated download URL first.
+  let url = null;
+  try { url = client.mxcUrlToHttp(mxc, undefined, undefined, undefined, true, true, true); } catch (_) {}
+  if (url) {
+    try {
+      const r = await fetch(url, { headers: { Authorization: 'Bearer ' + client.getAccessToken() } });
+      if (r.ok) return await r.blob();
+    } catch (_) {}
+  }
+  // Legacy unauthenticated URL (older homeservers).
+  let legacy = null;
+  try { legacy = client.mxcUrlToHttp(mxc); } catch (_) {}
+  if (legacy) {
+    try {
+      const r = await fetch(legacy);
+      if (r.ok) return await r.blob();
+    } catch (_) {}
+  }
+  return null;
+}
+
+// Read room timeline events of a given type, scanning back through paginated
+// history so older events are available too. Best-effort: bail out quietly
+// if pagination fails (e.g. peek not allowed).
+export async function readTimelineHistory(roomId, type, opts) {
+  const client = state.client;
+  if (!client) return [];
+  const room = client.getRoom(roomId);
+  if (!room) return [];
+  const max = (opts && opts.maxPages) || 4;
+  for (let i = 0; i < max; i++) {
+    const tl = room.getLiveTimeline();
+    try {
+      const more = await client.paginateEventTimeline(tl, { backwards: true, limit: 100 });
+      if (!more) break;
+    } catch (_) { break; }
+  }
+  return readTimeline(roomId, type);
+}
+
 // Read all timeline events of a given type from a room. Uses the live
 // timeline that's accumulated via sync; doesn't paginate backwards yet.
 export function readTimeline(roomId, type) {
@@ -415,11 +476,47 @@ export async function leaveRoom(roomId) {
   try { await client.forget(roomId); } catch (_) {}
 }
 
+// Subscribe to NEW encrypted timeline events of a given type on a room.
+// Returns an unsubscribe fn. Fires whenever a fresh (live) event of the
+// matching type arrives — typically because another member sent it.
+// Encrypted events arrive twice: once as the `m.room.encrypted` shell on
+// `Room.timeline`, then again on `Event.decrypted` once the cleartext is
+// available. We listen to both so the cleartext-typed match still fires.
+export function subscribeRoomEvents(roomId, type, handler) {
+  const client = state.client;
+  if (!client) return () => {};
+  const seen = new WeakSet();
+  function dispatch(event, room) {
+    if (!room || room.roomId !== roomId) return;
+    if (event.getType() !== type) return;
+    if (event.isRedacted()) return;
+    if (seen.has(event)) return;
+    seen.add(event);
+    handler(event);
+  }
+  const onTimeline = (event, room, toStartOfTimeline) => {
+    if (toStartOfTimeline) return; // backfill — not a live event
+    dispatch(event, room);
+  };
+  const onDecrypted = (event) => {
+    const room = client.getRoom(event.getRoomId());
+    dispatch(event, room);
+  };
+  client.on('Room.timeline', onTimeline);
+  client.on('Event.decrypted', onDecrypted);
+  return () => {
+    try { client.removeListener('Room.timeline', onTimeline); } catch (_) {}
+    try { client.removeListener('Event.decrypted', onDecrypted); } catch (_) {}
+  };
+}
+
 window.MX = {
   loginWithPassword, restoreSession, logout, wipeAll,
   getClient, getStatus, getSession, isReady, subscribe,
   getCryptoSelfTest,
   createEncryptedSpace, createEncryptedRoom, sendEncrypted, readTimeline,
+  readTimelineHistory, subscribeRoomEvents,
+  uploadMedia, downloadMedia,
   listJoinedSpaces, listSpaceChildren,
   inviteUser, leaveRoom, ensureEncryption,
 };

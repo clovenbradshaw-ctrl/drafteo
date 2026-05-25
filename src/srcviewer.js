@@ -352,8 +352,20 @@
         if (s) headerSlot.appendChild(buildHeader(s));
       }
     };
+    const onSourcesUpdated = (e) => {
+      if (!e.detail) return;
+      if (e.detail.doc_id !== doc_id) return;
+      if (e.detail.source_id && e.detail.source_id !== source_id) return;
+      render();
+    };
+    const onMediaCached = (e) => {
+      const s = Store.getSource(doc_id, source_id);
+      if (s && e.detail && e.detail.mxc === s.mxc_uri) render();
+    };
     window.addEventListener('drafteo:source-archived', onArchived);
     window.addEventListener('drafteo:source-archive-progress', onProgress);
+    window.addEventListener('drafteo:sources-updated', onSourcesUpdated);
+    window.addEventListener('drafteo:media-cached', onMediaCached);
 
     // Initial render
     render();

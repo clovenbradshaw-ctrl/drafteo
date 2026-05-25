@@ -24,7 +24,14 @@
     let tabs = null;
     try { tabs = JSON.parse(localStorage.getItem(TABS_KEY) || 'null'); } catch (_) {}
     if (!tabs || !tabs.open) tabs = { open: [], active: null };
-    tabs.open = (tabs.open || []).filter(id => Store.getDocument(id));
+    tabs.open = (tabs.open || []).filter(id => {
+      if (id === '__corkboard__') return true;
+      if (typeof id === 'string' && id.indexOf('__src__:') === 0) {
+        const parsed = parseSourceTabKey(id);
+        return !!(parsed && Store.getSource(parsed.doc_id, parsed.source_id));
+      }
+      return !!Store.getDocument(id);
+    });
     if (focus_doc_id && Store.getDocument(focus_doc_id)) {
       if (!tabs.open.includes(focus_doc_id)) tabs.open.unshift(focus_doc_id);
       tabs.active = focus_doc_id;
@@ -425,7 +432,9 @@
         if (id === '__corkboard__') {
           label = 'Corkboard'; ic = 'squares-four';
         } else if (typeof id === 'string' && id.indexOf('__src__:') === 0) {
-          const parts = id.split(':'); const did = parts[1], sid = parts[2];
+          const parsed = parseSourceTabKey(id);
+          if (!parsed) continue;
+          const { doc_id: did, source_id: sid } = parsed;
           const s = Store.getSource(did, sid);
           if (!s) continue;
           label = s.title || s.filename; ic = s.source_url ? 'globe' : 'file';
@@ -582,7 +591,7 @@
     }
 
     function openSource(doc_id, source_id) {
-      const key = '__src__:' + doc_id + ':' + source_id;
+      const key = sourceTabKey(doc_id, source_id);
       if (!tabs.open.includes(key)) tabs.open.push(key);
       tabs.active = key;
       saveTabs();
@@ -599,9 +608,9 @@
         return;
       }
       if (typeof tabs.active === 'string' && tabs.active.indexOf('__src__:') === 0) {
-        const parts = tabs.active.split(':');
-        const did = parts[1], sid = parts[2];
-        content.appendChild(window.SourceViewer.open(did, sid, ws_id, app));
+        const parsed = parseSourceTabKey(tabs.active);
+        if (!parsed) { tabs.active = tabs.open.find(t => t !== tabs.active) || null; renderContent(); return; }
+        content.appendChild(window.SourceViewer.open(parsed.doc_id, parsed.source_id, ws_id, app));
         return;
       }
       if (!tabs.active) {
@@ -626,6 +635,27 @@
     renderTabs();
     renderContent();
     mount(document.getElementById('root'), shell);
+
+    // Re-render the sidebar source list whenever Matrix delivers a fresh
+    // source event (e.g. another member or another device just imported
+    // something into a doc in this workspace).
+    const onSourcesUpdated = () => { try { renderSidebar(); renderTabs(); } catch (_) {} };
+    window.addEventListener('drafteo:sources-updated', onSourcesUpdated);
+  }
+
+  // Tab keys for source viewers embed the document's Matrix room id, which
+  // contains a colon (e.g. `!opaque:hyphae.social`). Source ids never
+  // contain colons (`src_` + alnum), so source_id is whatever follows the
+  // last colon; doc_id is everything before it.
+  function sourceTabKey(doc_id, source_id) {
+    return '__src__:' + doc_id + ':' + source_id;
+  }
+  function parseSourceTabKey(key) {
+    if (typeof key !== 'string' || key.indexOf('__src__:') !== 0) return null;
+    const rest = key.slice('__src__:'.length);
+    const cut = rest.lastIndexOf(':');
+    if (cut < 0) return null;
+    return { doc_id: rest.slice(0, cut), source_id: rest.slice(cut + 1) };
   }
 
   function workspaceHeader(ws, app, refresh) {

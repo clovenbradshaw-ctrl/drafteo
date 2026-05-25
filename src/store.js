@@ -175,6 +175,10 @@
         state.session = sess;
         cryptoKey = await deriveKey(sess.access_token);
         await loadCache();
+        // Pull the latest source state for every document room we know
+        // about. Fires off in the background so boot isn't blocked by
+        // network — the UI will refresh as events stream in.
+        scheduleSourceHydration().catch((e) => console.warn('source hydration failed', e));
       }
     } catch (e) {
       console.warn('Store bootstrap failed', e);
@@ -182,6 +186,84 @@
       bootDone = true;
       while (bootWaiters.length) bootWaiters.shift()();
     }
+  }
+
+  // Watch each document room's timeline for fresh source events so other
+  // members' updates appear without a reload. Idempotent per room.
+  const _liveSubs = new Map();
+  function watchRoomSources(doc_id) {
+    if (_liveSubs.has(doc_id)) return;
+    if (!window.MX || !window.MX.subscribeRoomEvents) return;
+    const off = window.MX.subscribeRoomEvents(doc_id, 'com.intelechia.drafteo.source', (event) => {
+      try {
+        const content = event.getContent();
+        if (!content || !content.source_id) return;
+        applySourceEvent(doc_id, content);
+        try { window.dispatchEvent(new CustomEvent('drafteo:sources-updated', { detail: { doc_id, source_id: content.source_id } })); } catch (_) {}
+        persist();
+      } catch (e) { console.warn('live source event failed', e); }
+    });
+    _liveSubs.set(doc_id, off);
+  }
+
+  // Apply a source event payload to the local index using latest-wins
+  // semantics on (source_id, updated_at). Tombstones (deleted:true) drop
+  // the local entry.
+  function applySourceEvent(doc_id, content) {
+    if (!content || !content.source_id) return;
+    state.sources[doc_id] = state.sources[doc_id] || {};
+    const existing = state.sources[doc_id][content.source_id];
+    const incomingTs = content.updated_at || content.uploaded_at || '';
+    if (existing) {
+      const existingTs = existing.updated_at || existing.uploaded_at || '';
+      if (existingTs && incomingTs && existingTs > incomingTs) return; // ours is newer
+    }
+    if (content.deleted) {
+      delete state.sources[doc_id][content.source_id];
+      return;
+    }
+    // Drop the matrix-event-specific marker; keep the rest.
+    const meta = Object.assign({}, content);
+    delete meta.deleted;
+    state.sources[doc_id][content.source_id] = meta;
+  }
+
+  async function hydrateSourcesForRoom(doc_id) {
+    if (!window.MX || !window.MX.isReady || !window.MX.isReady()) return;
+    watchRoomSources(doc_id);
+    let events = [];
+    try {
+      events = await window.MX.readTimelineHistory(doc_id, 'com.intelechia.drafteo.source', { maxPages: 2 });
+    } catch (_) { return; }
+    if (!events || events.length === 0) return;
+    // Iterate oldest -> newest so applySourceEvent's latest-wins works.
+    events.sort((a, b) => a.getTs() - b.getTs());
+    let touched = false;
+    for (const ev of events) {
+      const c = ev.getContent();
+      if (!c || !c.source_id) continue;
+      applySourceEvent(doc_id, c);
+      touched = true;
+    }
+    if (touched) {
+      persist();
+      try { window.dispatchEvent(new CustomEvent('drafteo:sources-updated', { detail: { doc_id } })); } catch (_) {}
+    }
+  }
+
+  async function scheduleSourceHydration() {
+    if (!window.MX || !window.MX.isReady) return;
+    // Wait for sync to finish so room timelines are populated.
+    const wait = async () => {
+      for (let i = 0; i < 40; i++) {
+        if (window.MX.isReady()) return true;
+        await new Promise(r => setTimeout(r, 250));
+      }
+      return window.MX.isReady();
+    };
+    if (!(await wait())) return;
+    const roomIds = Object.keys(state.documents || {});
+    await Promise.all(roomIds.map(id => hydrateSourcesForRoom(id).catch(() => {})));
   }
   const bootPromise = bootstrap();
   function ready() { return bootDone ? Promise.resolve() : new Promise((r) => bootWaiters.push(r)); }
@@ -374,6 +456,8 @@
       author: state.session.matrix_id,
     }];
     persist();
+    // New room — start watching it for source events as they arrive.
+    watchRoomSources(id);
     return state.documents[id];
   }
 
@@ -448,12 +532,39 @@
   }
 
   // ============ SOURCES ============
+  // Push the canonical source meta into the document room as an encrypted
+  // timeline event. Best-effort — local state is the source of truth until
+  // Matrix re-delivers it; failures are logged but don't break local UX.
+  async function publishSourceToMatrix(doc_id, meta) {
+    try {
+      if (!window.MX || !window.MX.isReady || !window.MX.isReady()) return;
+      watchRoomSources(doc_id);
+      // Strip any local-only blobs before sending.
+      const payload = Object.assign({}, meta);
+      delete payload.data_url;
+      payload.updated_at = nowIso();
+      await window.MX.sendEncrypted(doc_id, 'com.intelechia.drafteo.source', payload);
+    } catch (e) { console.warn('publishSourceToMatrix failed', e); }
+  }
+
+  // Upload the binary to the homeserver media repo so other members /
+  // devices can fetch it. Returns the real mxc URI on success, or null.
+  async function uploadBinaryToMatrix(blob, opts) {
+    try {
+      if (!window.MX || !window.MX.isReady || !window.MX.isReady()) return null;
+      return await window.MX.uploadMedia(blob, opts);
+    } catch (e) { console.warn('uploadMedia failed', e); return null; }
+  }
+
   async function uploadSource(doc_id, file, patch) {
     await latency(180 + Math.random() * 320);
     const data_url = await readFileAsDataURL(file);
-    const mxc = 'mxc://hyphae.social/' + uuid();
-    state.media[mxc] = { data_url, mime: file.type, filename: file.name };
     const source_id = 'src_' + uuid();
+    // Try to push the binary to the homeserver. Fall back to a synthetic
+    // mxc if the upload fails so local UX still works.
+    const realMxc = await uploadBinaryToMatrix(file, { name: file.name, type: file.type });
+    const mxc = realMxc || ('mxc://local/' + uuid());
+    state.media[mxc] = { data_url, mime: file.type, filename: file.name };
     const meta = Object.assign({
       source_id,
       filename: file.name,
@@ -472,20 +583,30 @@
     state.sources[doc_id] = state.sources[doc_id] || {};
     state.sources[doc_id][source_id] = meta;
     persist();
+    publishSourceToMatrix(doc_id, meta);
     return meta;
   }
   async function updateSource(doc_id, source_id, patch) {
     await latency();
     const s = state.sources[doc_id] && state.sources[doc_id][source_id];
     if (!s) throw new Error('No source');
-    Object.assign(s, patch);
+    Object.assign(s, patch, { updated_at: nowIso() });
     persist();
+    publishSourceToMatrix(doc_id, s);
     return s;
   }
   async function deleteSource(doc_id, source_id) {
     await latency();
     if (state.sources[doc_id]) delete state.sources[doc_id][source_id];
     persist();
+    // Tombstone so other members/devices drop the source too.
+    try {
+      if (window.MX && window.MX.isReady && window.MX.isReady()) {
+        await window.MX.sendEncrypted(doc_id, 'com.intelechia.drafteo.source', {
+          source_id, deleted: true, updated_at: nowIso(),
+        });
+      }
+    } catch (e) { console.warn('deleteSource matrix push failed', e); }
   }
   // Soft-hide an archived source from the main list (can't truly delete —
   // archive.org is permanent — but we can hide it locally).
@@ -494,7 +615,9 @@
     const s = state.sources[doc_id] && state.sources[doc_id][source_id];
     if (!s) return;
     s.hidden = !!hidden;
+    s.updated_at = nowIso();
     persist();
+    publishSourceToMatrix(doc_id, s);
     return s;
   }
   function listSources(doc_id, opts) {
@@ -528,13 +651,15 @@
     }
     const snap = sanitiseHtml(raw, url);
     const source_id = 'src_' + uuid();
-    const mxc = 'mxc://hyphae.social/' + uuid();
+    const htmlBlob = new Blob([snap.html], { type: 'text/html' });
+    const realMxc = await uploadBinaryToMatrix(htmlBlob, { name: snap.filename, type: 'text/html' });
+    const mxc = realMxc || ('mxc://local/' + uuid());
     state.media[mxc] = { data_url: 'data:text/html;base64,' + btoa(unescape(encodeURIComponent(snap.html))), mime: 'text/html', filename: snap.filename };
     const meta = {
       source_id,
       filename: snap.filename,
       mime: 'text/html',
-      size_bytes: new Blob([snap.html]).size,
+      size_bytes: htmlBlob.size,
       mxc_uri: mxc,
       title: snap.title,
       description: 'Web snapshot of ' + url,
@@ -551,6 +676,7 @@
     state.sources[doc_id] = state.sources[doc_id] || {};
     state.sources[doc_id][source_id] = meta;
     persist();
+    publishSourceToMatrix(doc_id, meta);
     return meta;
   }
 
@@ -704,7 +830,13 @@
   async function archiveSource(doc_id, source_id, onProgress) {
     const s = state.sources[doc_id] && state.sources[doc_id][source_id];
     if (!s) throw new Error('No source');
-    const media = state.media[s.mxc_uri];
+    let media = state.media[s.mxc_uri];
+    if (!media && s.mxc_uri && s.mxc_uri.startsWith('mxc://') && !s.mxc_uri.startsWith('mxc://local/')) {
+      // Cold cache (e.g. on another device): pull the binary down from
+      // the homeserver before we try to archive it.
+      await _hydrateMediaFromMatrix(s.mxc_uri);
+      media = state.media[s.mxc_uri];
+    }
     if (!media) throw new Error('Source binary missing from media store.');
     const prog = typeof onProgress === 'function' ? onProgress : () => {};
 
@@ -825,7 +957,43 @@
       .trim();
   }
 
-  function getMedia(mxc) { return state.media[mxc]; }
+  function getMedia(mxc) {
+    if (!mxc) return null;
+    const cached = state.media[mxc];
+    if (cached) return cached;
+    // Not in local cache — kick off an async fetch from the homeserver
+    // (only if it's a real mxc, not our local synthetic one). We return
+    // null right now; once the fetch completes, the source viewer will
+    // re-render via the `drafteo:media-cached` event and pick up the blob.
+    if (mxc.startsWith('mxc://') && !mxc.startsWith('mxc://local/')) {
+      _hydrateMediaFromMatrix(mxc);
+    }
+    return null;
+  }
+
+  const _mediaFetching = new Set();
+  async function _hydrateMediaFromMatrix(mxc) {
+    if (_mediaFetching.has(mxc)) return;
+    if (!window.MX || !window.MX.downloadMedia) return;
+    _mediaFetching.add(mxc);
+    try {
+      const blob = await window.MX.downloadMedia(mxc);
+      if (!blob) return;
+      const data_url = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(r.result);
+        r.onerror = rej;
+        r.readAsDataURL(blob);
+      });
+      state.media[mxc] = { data_url, mime: blob.type, filename: '' };
+      persist();
+      try { window.dispatchEvent(new CustomEvent('drafteo:media-cached', { detail: { mxc } })); } catch (_) {}
+    } catch (e) {
+      console.warn('media hydration failed', mxc, e);
+    } finally {
+      _mediaFetching.delete(mxc);
+    }
+  }
 
   // ============ COMMENTS ============
   async function createComment(doc_id, { anchor_id, quote, body }) {
