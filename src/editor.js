@@ -1165,6 +1165,26 @@
     scrubberBar.rebuild();
     setTimeout(() => { if (!embedded) titleInput.focus(); }, 60);
 
+    // ---- Live updates ----
+    // When the shim folds remote DEFs / new INS sources / new comments
+    // it dispatches drafteo:document-state. Refresh the sidebars and the
+    // scrubber so collaborators' edits show up without a reload.
+    // The body editor itself stays user-controlled (we don't clobber the
+    // contenteditable while the local user is typing).
+    const _onDocState = (ev) => {
+      if (ev.detail && ev.detail.doc_id && ev.detail.doc_id !== doc_id) return;
+      if (!document.contains(container)) {
+        window.removeEventListener('drafteo:document-state', _onDocState);
+        return;
+      }
+      try {
+        if (sourceRefresh) sourceRefresh();
+      } catch (_) {}
+      try { renderCommentsList(); } catch (_) {}
+      try { scrubberBar && scrubberBar.rebuild && scrubberBar.rebuild(); } catch (_) {}
+    };
+    window.addEventListener('drafteo:document-state', _onDocState);
+
     return { container, refresh: render };
   }
 

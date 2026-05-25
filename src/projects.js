@@ -48,6 +48,29 @@
 
     rebuild();
     mount(root, view);
+
+    // Live updates: a new invite arrives, or a collaborator creates a
+    // workspace we're in — refresh the grid. Also re-paint when the
+    // crypto self-test completes so the titlebar E2EE indicator settles
+    // from "INITIALIZING" to "VERIFIED" / "FAILED". Auto-removes once
+    // view detaches.
+    const _refresh = () => {
+      if (!document.contains(view)) {
+        window.removeEventListener('drafteo:rooms-changed', _refresh);
+        window.removeEventListener('drafteo:crypto-checked', _refresh);
+        return;
+      }
+      // Re-render the titlebar in place so the E2EE chip reflects the
+      // latest state.
+      try {
+        const newTitle = titlebar(Store.session(), app);
+        const oldTitle = view.querySelector('.titlebar');
+        if (oldTitle && newTitle) oldTitle.replaceWith(newTitle);
+      } catch (_) {}
+      rebuild();
+    };
+    window.addEventListener('drafteo:rooms-changed', _refresh);
+    window.addEventListener('drafteo:crypto-checked', _refresh);
   }
 
   function titlebar(session, app) {

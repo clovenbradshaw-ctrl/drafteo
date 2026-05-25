@@ -67,17 +67,32 @@ function emit(eventName, detail = {}) {
 // ── Recovery-key UX hooks (overlay-style — minimal UI) ──
 
 function installRecoveryHooks() {
-  setRecoveryKeyDisplayer((key) => new Promise((resolve) => {
-    const ok = confirm(
-      'IMPORTANT: save this recovery key. It restores your message history on new browsers/devices. It cannot be shown again.\n\n' + key
-    );
-    void ok;
-    resolve();
-  }));
-  setRecoveryKeyProvider(() => new Promise((resolve) => {
-    const v = prompt('This device is new. Paste your recovery key from first login (or cancel to skip):', '');
-    resolve(v ? v.trim() : null);
-  }));
+  setRecoveryKeyDisplayer((key) => {
+    // Prefer the styled modal once recovery-modals.js has run; fall
+    // back to confirm() if it's somehow not loaded yet.
+    if (typeof window !== 'undefined' && window.RecoveryUI?.display) {
+      return window.RecoveryUI.display(key);
+    }
+    return new Promise((resolve) => {
+      try {
+        confirm(
+          'IMPORTANT: save this recovery key. It restores your message history on new browsers/devices. It cannot be shown again.\n\n' + key
+        );
+      } catch (_) {}
+      resolve();
+    });
+  });
+  setRecoveryKeyProvider(() => {
+    if (typeof window !== 'undefined' && window.RecoveryUI?.ask) {
+      return window.RecoveryUI.ask();
+    }
+    return new Promise((resolve) => {
+      const v = (typeof prompt === 'function')
+        ? prompt('This device is new. Paste your recovery key from first login (or cancel to skip):', '')
+        : null;
+      resolve(v ? v.trim() : null);
+    });
+  });
   setProgress(() => {}); // could surface this in UI later
 }
 
@@ -1034,7 +1049,13 @@ async function ensureDocumentSession(doc_id) {
   s = new RoomSession(doc_id);
   documentSessions.set(doc_id, s);
   await s.open();
-  s.onUpdate(() => emit('drafteo:document-state', { doc_id }));
+  s.onUpdate(() => {
+    emit('drafteo:document-state', { doc_id });
+    // The old DraftEO UI listens for drafteo:sources-updated to refresh
+    // sidebar lists when a new source / comment / suggestion arrives.
+    // Keep that contract working.
+    emit('drafteo:sources-updated', { doc_id });
+  });
   return s;
 }
 
