@@ -52,6 +52,7 @@ export function getClient() { return state.client; }
 export function getStatus() { return state.status; }
 export function getSession() { return readSession(); }
 export function isReady() { return state.status === 'ready'; }
+export function getCryptoSelfTest() { return state.cryptoSelfTest || null; }
 
 function normalizeHomeserver(hs) {
   if (!hs) return null;
@@ -132,6 +133,29 @@ async function buildClient(session) {
   return client;
 }
 
+// Prove the Megolm round-trip works on this client. Creates an outbound
+// + inbound group session, encrypts a known plaintext, decrypts it back,
+// and verifies the result matches. Called once after login. The result
+// surfaces on window.MX.cryptoSelfTest so the UI can show "verified".
+function runMegolmSelfTest() {
+  const Olm = globalThis.Olm;
+  if (!Olm || !Olm.OutboundGroupSession) return { ok: false, reason: 'olm-unavailable' };
+  let outbound, inbound;
+  try {
+    outbound = new Olm.OutboundGroupSession(); outbound.create();
+    inbound = new Olm.InboundGroupSession(); inbound.create(outbound.session_key());
+    const pt = 'drafteo-e2ee-selftest-' + Math.random().toString(36).slice(2);
+    const ct = outbound.encrypt(pt);
+    const out = inbound.decrypt(ct);
+    return { ok: out.plaintext === pt, algorithm: 'm.megolm.v1.aes-sha2' };
+  } catch (e) {
+    return { ok: false, reason: (e && e.message) || String(e) };
+  } finally {
+    try { outbound && outbound.free(); } catch (_) {}
+    try { inbound && inbound.free(); } catch (_) {}
+  }
+}
+
 async function startSync(client) {
   return new Promise((resolve, reject) => {
     const onSync = (s) => {
@@ -191,6 +215,12 @@ async function bringUpClient(session) {
   emit({ type: 'status', status: state.status });
   const client = await buildClient(session);
   state.client = client;
+  state.cryptoSelfTest = runMegolmSelfTest();
+  if (!state.cryptoSelfTest.ok) {
+    console.error('Megolm self-test FAILED', state.cryptoSelfTest);
+  } else {
+    console.info('Megolm self-test passed (' + state.cryptoSelfTest.algorithm + ')');
+  }
   state.ready = startSync(client).then(() => {
     state.status = 'ready';
     emit({ type: 'status', status: state.status });
@@ -250,12 +280,17 @@ export async function ensureEncryption(client, roomId) {
   }
 }
 
-export async function createEncryptedSpace({ name, topic }) {
+// IMPORTANT: m.room.name and m.room.topic are state events, and Matrix
+// never encrypts state events — the homeserver always sees them. To keep
+// titles/descriptions out of server-visible cleartext, we DO NOT set them
+// on the room. Drafteo's Store keeps its own copy in the AES-encrypted
+// local cache (and, for cross-device sync, in encrypted timeline events).
+// Other Matrix clients (Element, etc.) will show these rooms as unnamed —
+// that's the price of not leaking titles.
+export async function createEncryptedSpace() {
   const client = state.client;
   if (!client) throw new Error('Matrix client not ready.');
   const r = await client.createRoom({
-    name: name || 'Untitled workspace',
-    topic: topic || undefined,
     preset: 'private_chat',
     visibility: 'private',
     creation_content: { type: 'm.space' },
@@ -268,7 +303,7 @@ export async function createEncryptedSpace({ name, topic }) {
   return r.room_id;
 }
 
-export async function createEncryptedRoom({ name, topic, parentSpaceId }) {
+export async function createEncryptedRoom({ parentSpaceId } = {}) {
   const client = state.client;
   if (!client) throw new Error('Matrix client not ready.');
   const initial_state = [
@@ -284,8 +319,6 @@ export async function createEncryptedRoom({ name, topic, parentSpaceId }) {
     });
   }
   const r = await client.createRoom({
-    name: name || 'Untitled document',
-    topic: topic || undefined,
     preset: 'private_chat',
     visibility: 'private',
     initial_state,
@@ -365,6 +398,7 @@ export async function leaveRoom(roomId) {
 window.MX = {
   loginWithPassword, restoreSession, logout, wipeAll,
   getClient, getStatus, getSession, isReady, subscribe,
+  getCryptoSelfTest,
   createEncryptedSpace, createEncryptedRoom, sendEncrypted, readTimeline,
   listJoinedSpaces, listSpaceChildren,
   inviteUser, leaveRoom, ensureEncryption,

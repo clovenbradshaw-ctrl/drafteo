@@ -57,13 +57,33 @@
         el('span.current', 'Workspaces'),
       ),
       el('div.spacer'),
-      el('div.statusdot.saved', el('span.dot'), el('span', 'E2EE · CONNECTED')),
+      el('div.statusdot.saved',
+        { title: e2eeTitle() },
+        el('span.dot'),
+        el('span', e2eeLabel()),
+      ),
       el('div.userchip',
         el('span.av', initials(session.matrix_id)),
         el('span', { style: { maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis' } }, session.matrix_id),
         el('button.ghost', { style: { padding: '1px 6px', fontSize: '10px', marginLeft: '6px' }, onClick: () => app.logout() }, 'LOGOUT'),
       ),
     );
+  }
+
+  function e2eeSelfTest() {
+    try { return window.MX && window.MX.getCryptoSelfTest && window.MX.getCryptoSelfTest(); }
+    catch (_) { return null; }
+  }
+  function e2eeLabel() {
+    const t = e2eeSelfTest();
+    if (!t) return 'E2EE · INITIALIZING';
+    return t.ok ? 'E2EE · VERIFIED' : 'E2EE · FAILED';
+  }
+  function e2eeTitle() {
+    const t = e2eeSelfTest();
+    if (!t) return 'Megolm self-test pending.';
+    if (t.ok) return 'Megolm encrypt/decrypt round-trip verified (' + t.algorithm + '). The homeserver only sees ciphertext.';
+    return 'Megolm self-test FAILED: ' + (t.reason || 'unknown') + '. New writes may not be E2EE — investigate before continuing.';
   }
 
   function greeting(session) {

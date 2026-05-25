@@ -228,7 +228,7 @@
   async function createWorkspace({ title, description }) {
     if (!state.session) throw new Error('Not logged in');
     const me = state.session.matrix_id;
-    const id = await window.MX.createEncryptedSpace({ name: title, topic: description });
+    const id = await window.MX.createEncryptedSpace();
     state.workspaces[id] = {
       id,
       matrix_room_id: id,
@@ -248,18 +248,9 @@
   async function updateWorkspace(id, patch) {
     if (!state.workspaces[id]) throw new Error('No workspace');
     Object.assign(state.workspaces[id], patch, { updated_at: nowIso() });
-    // Best-effort: propagate name/topic changes to the Matrix room.
-    try {
-      const client = window.MX && window.MX.getClient && window.MX.getClient();
-      if (client) {
-        if (patch && typeof patch.title === 'string') {
-          await client.sendStateEvent(id, 'm.room.name', { name: patch.title }, '');
-        }
-        if (patch && typeof patch.description === 'string') {
-          await client.sendStateEvent(id, 'm.room.topic', { topic: patch.description }, '');
-        }
-      }
-    } catch (e) { console.warn('updateWorkspace room sync failed', e); }
+    // Title/description live only in the AES-encrypted local cache. We
+    // deliberately do NOT mirror them to m.room.name/m.room.topic — those
+    // are plaintext state events the homeserver can read.
     await persist();
     return state.workspaces[id];
   }
@@ -349,11 +340,7 @@
   async function createDocument(ws_id, { title, dek }) {
     if (!state.workspaces[ws_id]) throw new Error('No workspace');
     const ws = state.workspaces[ws_id];
-    const id = await window.MX.createEncryptedRoom({
-      name: title || 'Untitled draft',
-      topic: dek || undefined,
-      parentSpaceId: ws_id,
-    });
+    const id = await window.MX.createEncryptedRoom({ parentSpaceId: ws_id });
     // Invite existing workspace members (best-effort).
     for (const m of (ws.members || [])) {
       if (m.matrix_id !== state.session.matrix_id) {
