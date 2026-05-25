@@ -202,6 +202,8 @@ export async function loginWithPassword({ homeserver, username, password }) {
   const baseUrl = await discoverHomeserver(homeserver);
 
   // Use a temporary client to perform login so we get device_id + token.
+  // Stop it as soon as we have the response — leaving it alive risks it
+  // sharing Olm/crypto state with the persistent client we build next.
   const tmp = sdk.createClient({ baseUrl });
   let resp;
   try {
@@ -214,6 +216,8 @@ export async function loginWithPassword({ homeserver, username, password }) {
     if (code === 'M_USER_DEACTIVATED') throw new Error('This account has been deactivated.');
     if (code === 'M_LIMIT_EXCEEDED') throw new Error('Too many login attempts. Wait a minute and try again.');
     throw new Error((e && e.message) || 'Login failed.');
+  } finally {
+    try { tmp.stopClient(); } catch (_) {}
   }
 
   const session = {
@@ -259,8 +263,23 @@ export async function restoreSession() {
   if (!s || !s.access_token) return null;
   try { await bringUpClient(s); return s; }
   catch (e) {
-    console.warn('Matrix restore failed', e);
-    state.status = 'error';
+    // The session token is still valid but our local stores no longer match
+    // the device the server knows about — typically the crypto store was
+    // wiped while localStorage survived, leaving the device's identity key
+    // local-fresh but server-stale (manifests as OLM.BAD_MESSAGE_MAC during
+    // OTK signature verification). Wipe the local stores AND the session so
+    // the next sign-in starts clean with a new device_id.
+    console.warn('Matrix restore failed; clearing stale session + stores', e);
+    const idb = globalThis.indexedDB;
+    if (idb) {
+      try { idb.deleteDatabase('drafteo-store'); } catch (_) {}
+      try { idb.deleteDatabase('drafteo-crypto'); } catch (_) {}
+    }
+    clearSession();
+    state.client = null;
+    state.ready = null;
+    state.status = 'stopped';
+    emit({ type: 'status', status: state.status });
     return null;
   }
 }
