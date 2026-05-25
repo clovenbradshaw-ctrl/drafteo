@@ -3,8 +3,13 @@
 // asset; the URL gets resolved at build time and Olm.init() is told where
 // to find it via locateFile.
 
-import Olm from '@matrix-org/olm';
+// IMPORTANT: @matrix-org/olm's init() does an implicit-global assignment
+// `OLM_OPTIONS = opts` which throws in strict-mode ES-module bundles
+// unless a global of that name already exists. Pre-define it (with the
+// correct locateFile baked in) so init() always succeeds.
 import olmWasmUrl from '@matrix-org/olm/olm.wasm?url';
-
-globalThis.Olm = Olm;
 globalThis.__olmWasmUrl = olmWasmUrl;
+globalThis.OLM_OPTIONS = { locateFile: () => olmWasmUrl };
+
+import Olm from '@matrix-org/olm';
+globalThis.Olm = Olm;
