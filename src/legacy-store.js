@@ -620,7 +620,228 @@ export const Store = {
     await def(ws_id, id, 'deleted', true);
   },
 
-  listEvidence(ws_id) { void ws_id; return []; },
+  // ── Corkboard: boards, evidence, strings, holons (Phase 4) ──
+
+  listBoards(ws_id) {
+    if (!ws_id) return [];
+    ensureWorkspaceSession(ws_id);
+    const session = workspaceSessions.get(ws_id);
+    if (!session) return [];
+    const boards = entitiesOfType(session.state, 'board')
+      .filter((b) => !b.deleted)
+      .map(boardCard)
+      .sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
+    // Auto-create a default board the first time we render after the
+    // session is warm. Fire-and-forget; the next render picks it up.
+    if (boards.length === 0 && session.store && session.store.hasData?.() !== undefined) {
+      const seedKey = '__autoseed_board_' + ws_id;
+      if (!autoseedFlags[seedKey]) {
+        autoseedFlags[seedKey] = true;
+        ins(ws_id, 'board', { name: 'Main', created_at: Date.now() })
+          .then((id) => {
+            try { localStorage.setItem('drafteo.board.active.' + ws_id, id); } catch (_) {}
+          })
+          .catch((e) => console.warn('[store-shim] default board create failed', e));
+      }
+    }
+    return boards;
+  },
+
+  activeBoard(ws_id) {
+    if (!ws_id) return null;
+    let saved = null;
+    try { saved = localStorage.getItem('drafteo.board.active.' + ws_id); } catch (_) {}
+    const boards = Store.listBoards(ws_id);
+    if (saved && boards.some((b) => b.id === saved)) return saved;
+    return boards[0]?.id || null;
+  },
+
+  async setActiveBoard(ws_id, board_id) {
+    try { localStorage.setItem('drafteo.board.active.' + ws_id, board_id); } catch (_) {}
+  },
+
+  async createBoard(ws_id, name) {
+    ensureWorkspaceSession(ws_id);
+    const id = await ins(ws_id, 'board', {
+      name: (name || 'New board').trim(),
+      created_at: Date.now(),
+    });
+    try { localStorage.setItem('drafteo.board.active.' + ws_id, id); } catch (_) {}
+    return id;
+  },
+
+  async renameBoard(ws_id, board_id, name) {
+    await def(ws_id, board_id, 'name', (name || '').trim());
+  },
+
+  async deleteBoard(ws_id, board_id) {
+    const boards = Store.listBoards(ws_id);
+    if (boards.length <= 1) throw new Error('Need at least one board.');
+    await def(ws_id, board_id, 'deleted', true);
+    if (Store.activeBoard(ws_id) === board_id) {
+      const remaining = Store.listBoards(ws_id).find((b) => b.id !== board_id);
+      if (remaining) await Store.setActiveBoard(ws_id, remaining.id);
+    }
+  },
+
+  async createEvidence(ws_id, patch) {
+    ensureWorkspaceSession(ws_id);
+    const board_id = patch?.board_id || Store.activeBoard(ws_id);
+    const payload = {
+      board_id,
+      source_id: patch?.source_id || null,
+      doc_id: patch?.doc_id || null,
+      quote: patch?.quote || '',
+      note: patch?.note || '',
+      tags: Array.isArray(patch?.tags) ? patch.tags : [],
+      color: patch?.color || 'amber',
+      x: patch?.x ?? (40 + Math.round(Math.random() * 240)),
+      y: patch?.y ?? (40 + Math.round(Math.random() * 160)),
+      w: patch?.w ?? 220,
+      h: patch?.h ?? 160,
+      created_at: Date.now(),
+      author: currentSession?.matrix_id || null,
+      deleted: false,
+    };
+    const id = await ins(ws_id, 'evidence', payload);
+    return Object.assign({ id }, payload);
+  },
+
+  async updateEvidence(ws_id, id, patch) {
+    const allowed = ['quote', 'note', 'tags', 'color', 'x', 'y', 'w', 'h', 'source_id', 'doc_id', 'board_id'];
+    for (const k of Object.keys(patch || {})) {
+      if (!allowed.includes(k)) continue;
+      await def(ws_id, id, k, patch[k]);
+    }
+  },
+
+  async deleteEvidence(ws_id, id) {
+    await def(ws_id, id, 'deleted', true);
+  },
+
+  listEvidence(ws_id, board_id) {
+    if (!ws_id) return [];
+    ensureWorkspaceSession(ws_id);
+    const session = workspaceSessions.get(ws_id);
+    if (!session) return [];
+    const bid = board_id || Store.activeBoard(ws_id);
+    if (!bid) return [];
+    return entitiesOfType(session.state, 'evidence')
+      .filter((e) => !e.deleted && (e.board_id || bid) === bid)
+      .map(evidenceCard)
+      .sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
+  },
+
+  async createString(ws_id, from, to, label) {
+    ensureWorkspaceSession(ws_id);
+    const board_id = Store.activeBoard(ws_id);
+    return ins(ws_id, 'string', {
+      board_id, from, to,
+      label: label || '',
+      kind: 'connects',
+      direction: 'undirected',
+      created_at: Date.now(),
+      deleted: false,
+    });
+  },
+
+  async updateString(ws_id, id, patch) {
+    const allowed = ['label', 'kind', 'direction'];
+    for (const k of Object.keys(patch || {})) {
+      if (!allowed.includes(k)) continue;
+      await def(ws_id, id, k, patch[k]);
+    }
+  },
+
+  async deleteString(ws_id, id) {
+    await def(ws_id, id, 'deleted', true);
+  },
+
+  listStrings(ws_id, board_id) {
+    if (!ws_id) return [];
+    ensureWorkspaceSession(ws_id);
+    const session = workspaceSessions.get(ws_id);
+    if (!session) return [];
+    const bid = board_id || Store.activeBoard(ws_id);
+    if (!bid) return [];
+    return entitiesOfType(session.state, 'string')
+      .filter((s) => !s.deleted && (s.board_id || bid) === bid)
+      .map((s) => ({
+        id: s._anchor,
+        from: s.from, to: s.to,
+        board_id: s.board_id,
+        label: s.label || '',
+        kind: s.kind || 'connects',
+        direction: s.direction || 'undirected',
+        created_at: s.created_at || s._created || 0,
+      }));
+  },
+
+  async createHolon(ws_id, patch) {
+    ensureWorkspaceSession(ws_id);
+    return ins(ws_id, 'holon', {
+      board_id: patch?.board_id || Store.activeBoard(ws_id),
+      name: patch?.name || 'Holon',
+      cardIds: Array.isArray(patch?.cardIds) ? patch.cardIds : [],
+      color: patch?.color || '',
+      created_at: Date.now(),
+      deleted: false,
+    });
+  },
+
+  async updateHolon(ws_id, id, patch) {
+    const allowed = ['name', 'cardIds', 'color'];
+    for (const k of Object.keys(patch || {})) {
+      if (!allowed.includes(k)) continue;
+      await def(ws_id, id, k, patch[k]);
+    }
+  },
+
+  async deleteHolon(ws_id, id) {
+    await def(ws_id, id, 'deleted', true);
+  },
+
+  listHolons(ws_id, board_id) {
+    if (!ws_id) return [];
+    ensureWorkspaceSession(ws_id);
+    const session = workspaceSessions.get(ws_id);
+    if (!session) return [];
+    const bid = board_id || Store.activeBoard(ws_id);
+    if (!bid) return [];
+    return entitiesOfType(session.state, 'holon')
+      .filter((h) => !h.deleted && (h.board_id || bid) === bid)
+      .map((h) => ({
+        id: h._anchor,
+        board_id: h.board_id,
+        name: h.name || 'Holon',
+        cardIds: Array.isArray(h.cardIds) ? h.cardIds : [],
+        color: h.color || '',
+        created_at: h.created_at || h._created || 0,
+      }));
+  },
+
+  // ── Search ──
+
+  searchSourcesInWorkspace(ws_id, query) {
+    if (!ws_id || !query) return [];
+    const q = String(query).toLowerCase().trim();
+    if (!q) return [];
+    const docs = Store.listDocuments(ws_id);
+    const results = [];
+    for (const d of docs) {
+      const sources = Store.listSources(d.id);
+      for (const s of sources) {
+        const hay = (s.title + ' ' + (s.filename || '') + ' ' + (s.description || '') + ' ' + (s.tags || []).join(' ') + ' ' + (s.source_url || '')).toLowerCase();
+        if (subsequenceMatch(hay, q)) {
+          results.push({
+            doc_id: d.id, doc_title: d.title,
+            source_id: s.source_id, source: s,
+          });
+        }
+      }
+    }
+    return results;
+  },
 
   // Comments + suggestions (Phase 5). Editor renders empty panels with
   // these returning []; mutators announce when they're touched so we
@@ -699,6 +920,45 @@ function workspaceCard(r) {
     updated_at: Date.now(),
     e2ee: true,
   };
+}
+
+// One-time flags so listBoards() doesn't fire the default-board INS
+// over and over when the corkboard re-renders during init.
+const autoseedFlags = Object.create(null);
+
+function boardCard(e) {
+  return {
+    id: e._anchor,
+    name: e.name || 'Board',
+    created_at: e.created_at || e._created || 0,
+  };
+}
+
+function evidenceCard(e) {
+  return {
+    id: e._anchor,
+    ws_id: null,                // corkboard doesn't read this back
+    board_id: e.board_id || null,
+    source_id: e.source_id || null,
+    doc_id: e.doc_id || null,
+    quote: e.quote || '',
+    note: e.note || '',
+    tags: Array.isArray(e.tags) ? e.tags : [],
+    color: e.color || 'amber',
+    x: e.x ?? 40, y: e.y ?? 40,
+    w: e.w ?? 220, h: e.h ?? 160,
+    created_at: e.created_at || e._created || 0,
+    author: e.author || null,
+  };
+}
+
+// Subsequence match used by the workspace-wide source search.
+function subsequenceMatch(hay, needle) {
+  let i = 0;
+  for (let j = 0; j < hay.length && i < needle.length; j++) {
+    if (hay[j] === needle[i]) i++;
+  }
+  return i === needle.length;
 }
 
 function sourceCard(e) {
