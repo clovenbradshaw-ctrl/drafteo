@@ -17,6 +17,10 @@ import {
   getBodyHistory, replayDocAt,
   createSource, deleteSource, restoreSource, updateSourceField,
   listSources, listDeletedSources, sourcesByAnchor, mxcToHttp,
+  createBoard, listBoards, renameBoard, deleteBoard,
+  createCard, listCards, moveCard, updateCard, deleteCard,
+  connectCards, listStrings, RELATION_LABEL,
+  createExhibit, listExhibits, deleteExhibit,
   STAGES, ROOM_TYPE,
 } from './model.js';
 import { discoverRooms, onRoomChanges, acceptInvite } from './rooms.js';
@@ -31,7 +35,7 @@ export function setLogger(fn) { log = fn; }
 
 // ── Helper: switch which view is visible ──
 
-const VIEW_IDS = ['view-auth', 'view-workspaces', 'view-workspace', 'view-editor'];
+const VIEW_IDS = ['view-auth', 'view-workspaces', 'view-workspace', 'view-editor', 'view-board'];
 export function showView(id) {
   for (const v of VIEW_IDS) $(v).classList.toggle('hidden', v !== id);
 }
@@ -123,12 +127,16 @@ function paintWorkspaceList({ onOpen }) {
 // ── Single workspace view ──
 
 let unsubWorkspaceRoom = null;
+let workspaceSession = null;
+let workspaceSessionUnsub = null;
 
-export function renderWorkspace(workspaceId, { onBack, onOpenDoc }) {
+export async function renderWorkspace(workspaceId, { onBack, onOpenDoc, onOpenBoard }) {
   showView('view-workspace');
+  await leaveWorkspaceView();
+
   const ws = listWorkspaces().find((w) => w.roomId === workspaceId);
   $('wsTitle').textContent = ws?.name || getRoomName(workspaceId) || '(workspace)';
-  $('wsBackBtn').onclick = onBack;
+  $('wsBackBtn').onclick = async () => { await leaveWorkspaceView(); onBack(); };
 
   $('wsInviteBtn').onclick = async () => {
     const userId = prompt('Invite user (full MXID, e.g. @kevin:hyphae.social):', '@');
@@ -149,23 +157,143 @@ export function renderWorkspace(workspaceId, { onBack, onOpenDoc }) {
       const { roomId } = await createDocument(workspaceId, title);
       $('newDocName').value = '';
       log('document created', 'ok');
-      setTimeout(() => onOpenDoc(roomId, workspaceId), 800);
+      setTimeout(async () => { await leaveWorkspaceView(); onOpenDoc(roomId, workspaceId); }, 800);
     } catch (e) {
       log('create failed: ' + e.message, 'err');
     }
   };
 
+  // Tabs
+  document.querySelectorAll('#view-workspace .ws-tabs .tab').forEach((btn) => {
+    btn.onclick = () => setWsTab(btn.dataset.wsTab);
+  });
+  setWsTab('docs');
+
+  // Open the workspace room's session for board/exhibit state.
+  workspaceSession = new RoomSession(workspaceId);
+  try {
+    await workspaceSession.open({ onProgress: (m) => log(m) });
+  } catch (e) {
+    log('open workspace failed: ' + e.message, 'err');
+  }
+
   const refresh = () => {
     paintDocumentList(workspaceId, { onOpenDoc });
     paintMembers('wsMembers', workspaceId);
+    if (workspaceSession) {
+      paintBoardList(workspaceId, workspaceSession.state, { onOpenBoard });
+      paintExhibitList(workspaceId, workspaceSession.state);
+    }
   };
   refresh();
   if (unsubWorkspaceRoom) unsubWorkspaceRoom();
   unsubWorkspaceRoom = onRoomChanges(refresh);
+  if (workspaceSession) {
+    workspaceSessionUnsub = workspaceSession.onUpdate(refresh);
+  }
+
+  // Board / exhibit creation
+  $('createBoardBtn').onclick = async () => {
+    const name = $('newBoardName').value.trim() || 'Untitled board';
+    try {
+      const anchor = await createBoard(workspaceId, name);
+      $('newBoardName').value = '';
+      log('board created', 'ok');
+      // Open it once it shows up in fold
+      setTimeout(async () => {
+        const here = workspaceSession?.state;
+        if (here && here.entities[anchor]) {
+          await leaveWorkspaceView();
+          onOpenBoard(workspaceId, anchor);
+        }
+      }, 800);
+    } catch (e) {
+      log('create board failed: ' + e.message, 'err');
+    }
+  };
+  $('createExhibitBtn').onclick = async () => {
+    const label = $('newExhibitLabel').value.trim();
+    const text = $('newExhibitText').value.trim();
+    if (!label && !text) return;
+    try {
+      await createExhibit(workspaceId, { label, text });
+      $('newExhibitLabel').value = '';
+      $('newExhibitText').value = '';
+      log('exhibit added', 'ok');
+    } catch (e) {
+      log('exhibit failed: ' + e.message, 'err');
+    }
+  };
 }
 
-export function leaveWorkspaceView() {
+function setWsTab(tab) {
+  document.querySelectorAll('#view-workspace .ws-tabs .tab').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.wsTab === tab);
+  });
+  $('wsTabDocs').classList.toggle('hidden', tab !== 'docs');
+  $('wsTabBoards').classList.toggle('hidden', tab !== 'boards');
+  $('wsTabExhibits').classList.toggle('hidden', tab !== 'exhibits');
+}
+
+export async function leaveWorkspaceView() {
   if (unsubWorkspaceRoom) { unsubWorkspaceRoom(); unsubWorkspaceRoom = null; }
+  if (workspaceSessionUnsub) { workspaceSessionUnsub(); workspaceSessionUnsub = null; }
+  if (workspaceSession) {
+    const s = workspaceSession;
+    workspaceSession = null;
+    await s.close();
+  }
+}
+
+function paintBoardList(workspaceId, state, { onOpenBoard }) {
+  const el = $('boardList');
+  el.innerHTML = '';
+  const boards = listBoards(state);
+  if (boards.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'No corkboards yet.';
+    el.appendChild(empty);
+    return;
+  }
+  for (const b of boards) {
+    const item = document.createElement('div');
+    item.className = 'list-item';
+    const cardCount = listCards(state, b._anchor).length;
+    item.innerHTML = `<span>${escapeHtml(b.title || 'Untitled')}</span><span class="dim">${cardCount} card${cardCount === 1 ? '' : 's'}</span>`;
+    item.onclick = async () => { await leaveWorkspaceView(); onOpenBoard(workspaceId, b._anchor); };
+    el.appendChild(item);
+  }
+}
+
+function paintExhibitList(workspaceId, state) {
+  const el = $('exhibitList');
+  el.innerHTML = '';
+  const exhibits = listExhibits(state);
+  if (exhibits.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'No exhibits yet.';
+    el.appendChild(empty);
+    return;
+  }
+  for (const ex of exhibits) {
+    const card = document.createElement('div');
+    card.className = 'exhibit-card';
+    card.innerHTML = `
+      <div class="label">${escapeHtml(ex.label || 'Untitled')}</div>
+      <div class="text">${escapeHtml(ex.text || '')}</div>
+      <div class="actions"></div>
+    `;
+    const del = document.createElement('button');
+    del.textContent = 'Delete';
+    del.onclick = async () => {
+      try { await deleteExhibit(workspaceId, ex._anchor); }
+      catch (e) { log('delete failed: ' + e.message, 'err'); }
+    };
+    card.querySelector('.actions').appendChild(del);
+    el.appendChild(card);
+  }
 }
 
 function paintDocumentList(workspaceId, { onOpenDoc }) {
@@ -532,6 +660,236 @@ function insertCiteAtCursor(anchor) {
   ta.setSelectionRange(caret, caret);
   ta.focus();
   ta.dispatchEvent(new Event('input'));
+}
+
+// ── Board (corkboard) view ──
+
+let boardSession = null;
+let boardUnsub = null;
+let currentBoardAnchor = null;
+let boardConnectMode = false;
+let boardConnectFrom = null;
+
+export async function renderBoard(workspaceId, boardAnchor, { onBack }) {
+  showView('view-board');
+  await closeBoard();
+
+  currentBoardAnchor = boardAnchor;
+  boardConnectMode = false;
+  boardConnectFrom = null;
+
+  $('boardBackBtn').onclick = async () => { await closeBoard(); onBack(); };
+  $('boardStatus').textContent = 'opening…';
+  $('boardTitle').value = '';
+  $('boardCanvas').classList.remove('connect-mode');
+
+  boardSession = new RoomSession(workspaceId);
+  try {
+    await boardSession.open({ onProgress: (m) => log(m) });
+  } catch (e) {
+    log('open board failed: ' + e.message, 'err');
+    $('boardStatus').textContent = 'error';
+    return;
+  }
+  if (!boardSession) return;
+
+  const board = boardSession.state.entities[boardAnchor];
+  $('boardTitle').value = board?.title || 'Untitled board';
+  $('boardStatus').textContent = 'ready';
+
+  let titleTimer = null;
+  $('boardTitle').oninput = () => {
+    $('boardStatus').textContent = 'editing…';
+    clearTimeout(titleTimer);
+    titleTimer = setTimeout(async () => {
+      try {
+        $('boardStatus').textContent = 'saving…';
+        await renameBoard(workspaceId, boardAnchor, $('boardTitle').value);
+        $('boardStatus').textContent = 'saved';
+      } catch (e) {
+        log('save failed: ' + e.message, 'err');
+        $('boardStatus').textContent = 'failed';
+      }
+    }, 1000);
+  };
+
+  $('boardAddCardBtn').onclick = async () => {
+    const label = prompt('Card label:', '');
+    if (label == null) return;
+    const text = prompt('Card text / quote:', '') || '';
+    const canvas = $('boardCanvas');
+    const x = Math.random() * (canvas.clientWidth - 200) + 20;
+    const y = Math.random() * (canvas.clientHeight - 120) + 20;
+    try {
+      await createCard(workspaceId, boardAnchor, { label, text, x, y });
+    } catch (e) {
+      log('add card failed: ' + e.message, 'err');
+    }
+  };
+
+  $('boardConnectModeBtn').onclick = () => {
+    boardConnectMode = !boardConnectMode;
+    boardConnectFrom = null;
+    $('boardCanvas').classList.toggle('connect-mode', boardConnectMode);
+    $('boardConnectModeBtn').classList.toggle('primary', boardConnectMode);
+    $('boardHint').textContent = boardConnectMode
+      ? 'Click source card, then target card'
+      : 'Click a card to drag · Connect mode then click two cards';
+  };
+
+  const refresh = () => paintBoard(workspaceId, boardAnchor, boardSession.state);
+  refresh();
+  boardUnsub = boardSession.onUpdate(refresh);
+}
+
+export async function closeBoard() {
+  if (boardUnsub) { boardUnsub(); boardUnsub = null; }
+  if (boardSession) {
+    const s = boardSession;
+    boardSession = null;
+    await s.close();
+  }
+  currentBoardAnchor = null;
+  boardConnectMode = false;
+  boardConnectFrom = null;
+}
+
+function paintBoard(workspaceId, boardAnchor, state) {
+  const canvas = $('boardCanvas');
+  const svg = $('boardStrings');
+  // Wipe everything except the SVG
+  Array.from(canvas.querySelectorAll('.board-card')).forEach((el) => el.remove());
+  svg.innerHTML = '';
+
+  const cards = listCards(state, boardAnchor);
+  const cardMap = {};
+  for (const c of cards) cardMap[c._anchor] = c;
+
+  // Cards
+  for (const c of cards) {
+    const el = document.createElement('div');
+    el.className = 'board-card';
+    if (c.color) el.style.borderLeft = `4px solid ${c.color}`;
+    const pos = c.pos || { x: 40, y: 40 };
+    el.style.left = pos.x + 'px';
+    el.style.top = pos.y + 'px';
+    el.innerHTML = `
+      <div class="card-label">${escapeHtml(c.label || '(no label)')}</div>
+      <div class="card-text">${escapeHtml((c.text || '').slice(0, 200))}</div>
+      <div class="card-actions"></div>
+    `;
+    const editBtn = document.createElement('button');
+    editBtn.textContent = 'Edit';
+    editBtn.onclick = async (ev) => {
+      ev.stopPropagation();
+      const label = prompt('Card label:', c.label || '');
+      if (label != null) await updateCard(workspaceId, c._anchor, 'label', label.trim());
+      const text = prompt('Card text:', c.text || '');
+      if (text != null) await updateCard(workspaceId, c._anchor, 'text', text.trim());
+    };
+    const delBtn = document.createElement('button');
+    delBtn.textContent = '×';
+    delBtn.title = 'Delete card';
+    delBtn.onclick = async (ev) => {
+      ev.stopPropagation();
+      if (!confirm('Delete this card?')) return;
+      try { await deleteCard(workspaceId, c._anchor); }
+      catch (e) { log('delete failed: ' + e.message, 'err'); }
+    };
+    el.querySelector('.card-actions').append(editBtn, delBtn);
+    wireCardDrag(el, c, workspaceId);
+    if (boardConnectFrom === c._anchor) el.classList.add('selected');
+    canvas.appendChild(el);
+  }
+
+  // Strings (CON connections that link two cards in this board)
+  const strings = listStrings(state, boardAnchor);
+  const ns = 'http://www.w3.org/2000/svg';
+  for (const s of strings) {
+    const a = cardMap[s.source]; const b = cardMap[s.target];
+    if (!a || !b) continue;
+    const ax = (a.pos?.x ?? 40) + 90;
+    const ay = (a.pos?.y ?? 40) + 35;
+    const bx = (b.pos?.x ?? 40) + 90;
+    const by = (b.pos?.y ?? 40) + 35;
+    const line = document.createElementNS(ns, 'line');
+    line.setAttribute('x1', ax); line.setAttribute('y1', ay);
+    line.setAttribute('x2', bx); line.setAttribute('y2', by);
+    line.setAttribute('class', s.type || 'connects');
+    svg.appendChild(line);
+    // Label at midpoint
+    const mx = (ax + bx) / 2;
+    const my = (ay + by) / 2;
+    const text = document.createElementNS(ns, 'text');
+    text.setAttribute('x', mx); text.setAttribute('y', my);
+    text.setAttribute('text-anchor', 'middle');
+    text.setAttribute('class', 'label-text');
+    text.textContent = RELATION_LABEL[s.type] || s.type || '';
+    svg.appendChild(text);
+  }
+}
+
+function wireCardDrag(el, card, workspaceId) {
+  el.onmousedown = (ev) => {
+    if (ev.target.tagName === 'BUTTON') return;
+    if (boardConnectMode) {
+      handleConnectClick(card, workspaceId);
+      return;
+    }
+    const startX = ev.clientX;
+    const startY = ev.clientY;
+    const originX = card.pos?.x ?? 0;
+    const originY = card.pos?.y ?? 0;
+    el.classList.add('dragging');
+    ev.preventDefault();
+
+    const onMove = (e) => {
+      const nx = Math.max(0, originX + (e.clientX - startX));
+      const ny = Math.max(0, originY + (e.clientY - startY));
+      el.style.left = nx + 'px';
+      el.style.top = ny + 'px';
+    };
+    const onUp = async (e) => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      el.classList.remove('dragging');
+      const nx = Math.max(0, originX + (e.clientX - startX));
+      const ny = Math.max(0, originY + (e.clientY - startY));
+      if (Math.abs(nx - originX) > 2 || Math.abs(ny - originY) > 2) {
+        try { await moveCard(workspaceId, card._anchor, nx, ny); }
+        catch (err) { log('move failed: ' + err.message, 'err'); }
+      }
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+}
+
+async function handleConnectClick(card, workspaceId) {
+  if (!boardConnectFrom) {
+    boardConnectFrom = card._anchor;
+    $('boardHint').textContent = `From ${card.label || card._anchor.slice(-6)} — pick target card`;
+    paintBoard(workspaceId, currentBoardAnchor, boardSession.state);
+    return;
+  }
+  if (boardConnectFrom === card._anchor) {
+    boardConnectFrom = null;
+    $('boardHint').textContent = 'Click source card, then target card';
+    paintBoard(workspaceId, currentBoardAnchor, boardSession.state);
+    return;
+  }
+  try {
+    const rel = $('boardRelation').value || 'connects';
+    await connectCards(workspaceId, boardConnectFrom, card._anchor, rel);
+    log(`string ${rel}: ${boardConnectFrom.slice(-6)} → ${card._anchor.slice(-6)}`, 'ok');
+  } catch (e) {
+    log('connect failed: ' + e.message, 'err');
+  }
+  boardConnectFrom = null;
+  boardConnectMode = false;
+  $('boardCanvas').classList.remove('connect-mode');
+  $('boardConnectModeBtn').classList.remove('primary');
+  $('boardHint').textContent = 'Click a card to drag · Connect mode then click two cards';
 }
 
 function formatBytes(n) {

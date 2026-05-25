@@ -15,6 +15,7 @@ import {
   renderWorkspaces, leaveWorkspacesView,
   renderWorkspace, leaveWorkspaceView,
   renderEditor, closeEditor,
+  renderBoard, closeBoard,
 } from './views.js';
 
 // ── App namespace ──
@@ -90,9 +91,10 @@ async function goWorkspace(workspaceId) {
   view.workspaceId = workspaceId;
   view.docRoomId = null;
   $('userBar').classList.remove('hidden');
-  renderWorkspace(workspaceId, {
+  await renderWorkspace(workspaceId, {
     onBack: () => goWorkspaces(),
     onOpenDoc: (docRoomId, wsId) => goEditor(docRoomId, wsId),
+    onOpenBoard: (wsId, boardAnchor) => goBoard(wsId, boardAnchor),
   });
 }
 
@@ -107,11 +109,22 @@ async function goEditor(docRoomId, workspaceId) {
   });
 }
 
+async function goBoard(workspaceId, boardAnchor) {
+  await leaveCurrentView();
+  view.name = 'board';
+  view.workspaceId = workspaceId;
+  $('userBar').classList.remove('hidden');
+  await renderBoard(workspaceId, boardAnchor, {
+    onBack: () => goWorkspace(workspaceId),
+  });
+}
+
 async function leaveCurrentView() {
   switch (view.name) {
     case 'workspaces': leaveWorkspacesView(); break;
-    case 'workspace': leaveWorkspaceView(); break;
+    case 'workspace': await leaveWorkspaceView(); break;
     case 'editor': await closeEditor(); break;
+    case 'board': await closeBoard(); break;
   }
 }
 

@@ -13,14 +13,33 @@ import {
   createRoom, discoverRooms, getMembers, invite as inviteUser,
   getTimeline, onTimeline, onDecrypted, loadTimelineSince,
 } from './rooms.js';
-import { ins, def, getNamespace } from './operators.js';
+import { ins, def, con, getNamespace } from './operators.js';
 import { fold, foldFrom, initial, entitiesOfType } from './fold.js';
 import { EventStore } from './store.js';
 
 export const ENTITY = Object.freeze({
   DOCUMENT: 'document',
   SOURCE: 'source',
+  BOARD: 'board',
+  CARD: 'card',
+  EXHIBIT: 'exhibit',
 });
+
+export const RELATION = Object.freeze({
+  CONNECTS:    'connects',
+  SUPPORTS:    'supports',
+  CONTRADICTS: 'contradicts',
+  SEE_ALSO:    'see_also',
+  FOLLOWS:     'follows_from',
+});
+
+export const RELATION_LABEL = {
+  connects:     'connects',
+  supports:     'supports',
+  contradicts:  'contradicts',
+  see_also:     'see also',
+  follows_from: 'follows from',
+};
 
 export const ROOM_TYPE = Object.freeze({
   WORKSPACE: 'workspace',
@@ -195,6 +214,89 @@ export function sourcesByAnchor(state) {
     map[s._anchor] = s;
   }
   return map;
+}
+
+// ── Boards & cards ──
+
+export async function createBoard(workspaceId, title) {
+  const t = (title || 'Untitled board').trim();
+  return ins(workspaceId, ENTITY.BOARD, { title: t });
+}
+
+export async function renameBoard(workspaceId, anchor, title) {
+  return def(workspaceId, anchor, 'title', (title || 'Untitled board').trim());
+}
+
+export async function deleteBoard(workspaceId, anchor) {
+  return def(workspaceId, anchor, 'deleted', true);
+}
+
+export function listBoards(state) {
+  return entitiesOfType(state, ENTITY.BOARD)
+    .filter((b) => !b.deleted)
+    .sort((a, b) => (a._created || 0) - (b._created || 0));
+}
+
+export async function createCard(workspaceId, boardAnchor, { label, text, x = 80, y = 80, color = null, source_ref = null } = {}) {
+  return ins(workspaceId, ENTITY.CARD, {
+    board_anchor: boardAnchor,
+    label: (label || '').trim(),
+    text: (text || '').trim(),
+    pos: { x, y },
+    color,
+    source_ref,  // optional cross-room ref: { doc_room_id, source_anchor }
+  });
+}
+
+export async function moveCard(workspaceId, cardAnchor, x, y) {
+  return def(workspaceId, cardAnchor, 'pos', { x, y });
+}
+
+export async function updateCard(workspaceId, cardAnchor, field, value) {
+  const allowed = ['label', 'text', 'color', 'source_ref'];
+  if (!allowed.includes(field)) throw new Error(`field not editable: ${field}`);
+  return def(workspaceId, cardAnchor, field, value);
+}
+
+export async function deleteCard(workspaceId, cardAnchor) {
+  return def(workspaceId, cardAnchor, 'deleted', true);
+}
+
+export function listCards(state, boardAnchor) {
+  return entitiesOfType(state, ENTITY.CARD)
+    .filter((c) => !c.deleted && c.board_anchor === boardAnchor)
+    .sort((a, b) => (a._created || 0) - (b._created || 0));
+}
+
+export async function connectCards(workspaceId, sourceAnchor, targetAnchor, relationType = RELATION.CONNECTS) {
+  return con(workspaceId, sourceAnchor, targetAnchor, relationType);
+}
+
+/** Connections on a given board: both endpoints must be live cards in this board. */
+export function listStrings(state, boardAnchor) {
+  const cards = new Set(listCards(state, boardAnchor).map((c) => c._anchor));
+  return state.connections.filter((c) => cards.has(c.source) && cards.has(c.target));
+}
+
+// ── Exhibits ──
+
+export async function createExhibit(workspaceId, { label, text, doc_room_id = null, source_anchor = null } = {}) {
+  return ins(workspaceId, ENTITY.EXHIBIT, {
+    label: (label || '').trim(),
+    text: (text || '').trim(),
+    doc_room_id,
+    source_anchor,
+  });
+}
+
+export async function deleteExhibit(workspaceId, anchor) {
+  return def(workspaceId, anchor, 'deleted', true);
+}
+
+export function listExhibits(state) {
+  return entitiesOfType(state, ENTITY.EXHIBIT)
+    .filter((e) => !e.deleted)
+    .sort((a, b) => (b._created || 0) - (a._created || 0));
 }
 
 // ── History / replay ──

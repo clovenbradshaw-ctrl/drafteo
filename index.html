@@ -94,6 +94,52 @@ button.ghost:hover { color:var(--accent); background:transparent; }
   padding:14px 16px; line-height:1.7; font-size:14px; resize:vertical;
 }
 
+/* Workspace tabs */
+.ws-tabs { margin-top:6px; }
+.ws-tab-pane { padding-top:14px; }
+.ws-tab-pane.hidden { display:none; }
+
+/* Board */
+.board-toolbar { display:flex; align-items:center; gap:10px; margin:10px 0 14px; }
+.board-toolbar .dim { color:var(--text-dim); font-size:11px; }
+.board-canvas {
+  position:relative; width:100%; height:65vh; min-height:480px;
+  background:repeating-linear-gradient(0deg, transparent 0 24px, var(--surface-2) 24px 25px),
+             repeating-linear-gradient(90deg, transparent 0 24px, var(--surface-2) 24px 25px),
+             var(--bg);
+  border:1px solid var(--border); border-radius:var(--radius); overflow:hidden;
+}
+.board-strings { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+.board-strings line { stroke:var(--accent-dim); stroke-width:1.5; }
+.board-strings line.supports { stroke:#6a9a6a; }
+.board-strings line.contradicts { stroke:#b06060; }
+.board-strings line.see_also { stroke:#7080b0; stroke-dasharray:4 3; }
+.board-strings line.follows_from { stroke:#c4956a; stroke-dasharray:6 3; }
+.board-strings line.connects { stroke:var(--accent-dim); }
+.board-strings .label-bg { fill:var(--surface); }
+.board-strings .label-text { font-family:var(--mono); font-size:9px; fill:var(--text-dim); }
+
+.board-card {
+  position:absolute; width:180px; min-height:70px;
+  background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
+  padding:8px 10px; cursor:grab; user-select:none; font-size:11px;
+  box-shadow:0 2px 8px rgba(0,0,0,.4);
+}
+.board-card.dragging { cursor:grabbing; opacity:.85; }
+.board-card.selected { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-glow); }
+.board-card .card-label { font-family:var(--serif); font-size:12px; color:var(--text-bright); margin-bottom:4px; }
+.board-card .card-text { color:var(--text); line-height:1.55; }
+.board-card .card-actions { margin-top:6px; display:flex; gap:4px; }
+.board-card .card-actions button { padding:2px 5px; font-size:10px; }
+
+.board-canvas.connect-mode .board-card { cursor:crosshair; }
+
+/* Exhibit list */
+.exhibit-card { padding:10px 12px; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius); margin-bottom:8px; }
+.exhibit-card .label { font-family:var(--serif); color:var(--text-bright); margin-bottom:4px; }
+.exhibit-card .text { font-size:12px; color:var(--text); line-height:1.6; }
+.exhibit-card .actions { margin-top:6px; display:flex; gap:6px; }
+
 /* Editor edit layout: body + sources pane */
 .editor-edit-layout { display:grid; grid-template-columns: 1fr 260px; gap:16px; }
 .editor-edit-main { position:relative; min-width:0; }
@@ -245,11 +291,61 @@ button.ghost:hover { color:var(--accent); background:transparent; }
         <button id="wsInviteBtn" class="ghost">+ Invite</button>
       </div>
 
-      <h3>Documents</h3>
-      <div id="documentList"></div>
-      <div class="create-row">
-        <input id="newDocName" placeholder="New document title">
-        <button class="primary" id="createDocBtn">New document</button>
+      <div class="editor-tabs ws-tabs">
+        <button class="tab active" data-ws-tab="docs">Documents</button>
+        <button class="tab" data-ws-tab="boards">Corkboards</button>
+        <button class="tab" data-ws-tab="exhibits">Exhibits</button>
+      </div>
+
+      <div id="wsTabDocs" class="ws-tab-pane">
+        <div id="documentList"></div>
+        <div class="create-row">
+          <input id="newDocName" placeholder="New document title">
+          <button class="primary" id="createDocBtn">New document</button>
+        </div>
+      </div>
+
+      <div id="wsTabBoards" class="ws-tab-pane hidden">
+        <div id="boardList"></div>
+        <div class="create-row">
+          <input id="newBoardName" placeholder="New corkboard name">
+          <button class="primary" id="createBoardBtn">New corkboard</button>
+        </div>
+      </div>
+
+      <div id="wsTabExhibits" class="ws-tab-pane hidden">
+        <div id="exhibitList"></div>
+        <div class="create-row">
+          <input id="newExhibitLabel" placeholder="Exhibit label">
+          <input id="newExhibitText" placeholder="Quote / text" style="flex:2">
+          <button class="primary" id="createExhibitBtn">Add exhibit</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CORKBOARD -->
+  <section id="view-board" class="view hidden">
+    <button id="boardBackBtn" class="back">← Workspace</button>
+    <div class="panel">
+      <div class="editor-header">
+        <input id="boardTitle" class="title-input" placeholder="Untitled board">
+        <select id="boardRelation" title="Relation type for new strings">
+          <option value="connects">connects</option>
+          <option value="supports">supports</option>
+          <option value="contradicts">contradicts</option>
+          <option value="see_also">see also</option>
+          <option value="follows_from">follows from</option>
+        </select>
+        <span class="save-status" id="boardStatus">—</span>
+      </div>
+      <div class="board-toolbar">
+        <button id="boardAddCardBtn" class="primary">+ Card</button>
+        <button id="boardConnectModeBtn">Connect</button>
+        <span class="dim" id="boardHint">Click a card to drag · Connect mode then click two cards</span>
+      </div>
+      <div id="boardCanvas" class="board-canvas">
+        <svg id="boardStrings" class="board-strings"></svg>
       </div>
     </div>
   </section>
