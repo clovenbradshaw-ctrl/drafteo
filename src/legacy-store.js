@@ -327,7 +327,12 @@ export const Store = {
     return Store.getDocument(doc_id);
   },
 
-  /** Append-only edit log derived from the document entity's _evaluations. */
+  /**
+   * Append-only edit log derived from the document entity's _evaluations.
+   * Returned in the old DraftEO shape (version_to / eo_operator / resolution
+   * / timestamp) plus newer convenience aliases (version / op / ts) so both
+   * the history scrubber and any newer reader can consume it.
+   */
   getEditLog(doc_id) {
     const session = documentSessions.get(doc_id);
     if (!session) return [];
@@ -337,16 +342,40 @@ export const Store = {
     return entries.map((e, i) => {
       let extra = {};
       try { extra = JSON.parse(e.note || '{}'); } catch (_) {}
+      const v = i + 1;
       return {
-        version: i + 1,
-        ts: e._ts,
+        version_to: v,
+        version: v,
+        eo_operator: e.result,
         op: e.result,
         resolution: extra.resolution || '',
         site: extra.site || '',
         note: extra.note || '',
+        timestamp: e._ts,
+        ts: e._ts,
         sender: e._sender || null,
       };
     });
+  },
+
+  /** Pinned checkpoints derived from EVA(criterion='checkpoint'). */
+  listCheckpoints(doc_id) {
+    const session = documentSessions.get(doc_id);
+    if (!session) return [];
+    const doc = findDocEntity(session.state);
+    if (!doc || !Array.isArray(doc._evaluations)) return [];
+    return doc._evaluations
+      .filter((e) => e.criterion === 'checkpoint')
+      .map((e) => {
+        let extra = {};
+        try { extra = JSON.parse(e.note || '{}'); } catch (_) {}
+        return {
+          name: extra.name || 'Checkpoint',
+          ts: e._ts,
+          sender: e._sender || null,
+        };
+      })
+      .sort((a, b) => a.ts - b.ts);
   },
 
   /** Body text at a given version (1-indexed). v=0 returns the initial INS body. */
@@ -1123,14 +1152,20 @@ function exhibitCard(e) {
 
 function documentCard(r, docEntity) {
   const body = docEntity?.body ?? '';
+  // Version = count of edit-log entries. The history scrubber uses this
+  // to label HEAD and to drive restoreToVersion(N).
+  const editCount = Array.isArray(docEntity?._evaluations)
+    ? docEntity._evaluations.filter((e) => e.criterion === 'edit').length
+    : 0;
   return {
     id: r.roomId,
     workspace_id: r.meta?.workspace_id || null,
     title: docEntity?.title || r.name || '(untitled)',
     dek: docEntity?.dek || '',
     body_markdown: body,
-    version: 0, // Phase 2: derive from edit log length
+    version: editCount + 1, // INS is v1; first edit moves us to v2
     stage: docEntity?.stage || 'drafting',
+    footnotes: docEntity?.footnotes || {},
     created_at: docEntity?._created || Date.now(),
     updated_at: docEntity?._updated || docEntity?._created || Date.now(),
   };

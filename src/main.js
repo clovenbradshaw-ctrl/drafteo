@@ -33,6 +33,7 @@ import './srcviewer.js';
 import './editor.js';
 import './corkboard.js';
 import './search.js';
+import './exporter.js';
 import './projects.js';
 import './workspace.js';
 import './app.js';
