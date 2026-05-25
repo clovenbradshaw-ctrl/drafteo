@@ -16,7 +16,7 @@ import {
   RoomSession, findDocEntity, saveDocTitle, saveDocBody, saveDocStage,
   getBodyHistory, replayDocAt,
   createSource, deleteSource, restoreSource, updateSourceField,
-  listSources, listDeletedSources, sourcesByAnchor, mxcToHttp,
+  listSources, listDeletedSources, sourcesByAnchor, mxcToHttp, openSourceObjectUrl,
   createBoard, listBoards, renameBoard, deleteBoard,
   createCard, listCards, moveCard, updateCard, deleteCard,
   connectCards, listStrings, RELATION_LABEL,
@@ -617,9 +617,26 @@ function renderSourceCard(roomId, s, deleted) {
   if (s.mxc_url) {
     const openBtn = document.createElement('button');
     openBtn.textContent = 'Open';
-    openBtn.onclick = () => {
-      const url = mxcToHttp(s.mxc_url);
-      if (url) window.open(url, '_blank', 'noopener');
+    openBtn.onclick = async () => {
+      openBtn.disabled = true;
+      const oldLabel = openBtn.textContent;
+      openBtn.textContent = 'opening…';
+      try {
+        const res = await openSourceObjectUrl(s);
+        if (!res) throw new Error('no media URL');
+        const win = window.open(res.url, '_blank', 'noopener');
+        if (res.revoke) {
+          // Keep the blob URL alive long enough for the new tab to load it,
+          // then free the memory.
+          setTimeout(() => URL.revokeObjectURL(res.url), 60_000);
+        }
+        if (!win) log('popup blocked — allow popups to open sources', 'err');
+      } catch (e) {
+        log('open failed: ' + e.message, 'err');
+      } finally {
+        openBtn.disabled = false;
+        openBtn.textContent = oldLabel;
+      }
     };
     actions.appendChild(openBtn);
   }

@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "marked": "^18.0.4",
+    "matrix-encrypt-attachment": "^1.0.3",
     "matrix-js-sdk": "^41.5.0"
   },
   "devDependencies": {
