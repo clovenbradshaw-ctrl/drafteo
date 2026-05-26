@@ -217,13 +217,35 @@
     // ---- compose layout (no always-visible format bar; selection toolbar floats in instead) ----
     const gutter = el('div.gutter');
     const selToolbar = el('div.sel-toolbar', { style: { display: 'none' } });
+    const pageinner = el('div.pageinner', modeBanner, page, gutter, selToolbar);
+    const pagewrap = el('div.pagewrap', pageinner);
     const container = el('div.editor',
       editorHeader,
       el('div.editorbody',
-        el('div.pagewrap', el('div.pageinner', modeBanner, page, gutter, selToolbar)),
+        pagewrap,
         sidebar,
       ),
     );
+
+    // Click in the empty padding below (or beside) the body drops the caret
+    // at the end of the document — without this, .pageinner's 240px of
+    // bottom padding swallows clicks instead of focusing the editor.
+    pagewrap.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      if (body.contentEditable !== 'true') return;
+      const t = e.target;
+      if (t !== pagewrap && t !== pageinner && t !== page) return;
+      const rect = body.getBoundingClientRect();
+      if (e.clientY < rect.top) return;
+      e.preventDefault();
+      body.focus();
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(body);
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    });
 
     // ---- save logic ----
     const doSave = async () => {
