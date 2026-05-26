@@ -4,8 +4,9 @@
 // archive.org URL if preserved there, otherwise the original
 // `source_url` for web imports. File-only exhibits show "Local file".
 //
-// Right-click any row to re-ingest the URL (dedupe-aware) into another
-// draft as a fresh exhibit.
+// Sources are considered "in" the workspace — once a URL is here, you
+// don't re-ingest it elsewhere; you cite it from any draft via the
+// Cite picker. This view exposes copy/open/archive actions per row.
 //
 // Mounted in the workspace shell as the `__sources_index__` tab.
 
@@ -56,7 +57,7 @@
       el('div.srcindex-title',
         el('div', { style: { fontFamily: 'var(--display)', fontSize: '22px', fontWeight: 700, color: 'var(--ink)' } }, 'Sources'),
         el('div', { style: { fontFamily: 'var(--sans)', fontSize: '12px', color: 'var(--ink-faint)' } },
-          'Every URL behind every exhibit in this workspace — archive.org if preserved, otherwise the original. Right-click a row to re-ingest into another draft.'),
+          'Every URL behind every exhibit in this workspace — archive.org if preserved, otherwise the original. Click ARCHIVE to preserve a source to archive.org.'),
       ),
       el('div.srcindex-actions',
         statusFilter,
@@ -206,6 +207,15 @@
       );
 
       const actCell = el('div.srcindex-cell.col-act');
+      if (r.kind === 'original') {
+        actCell.appendChild(el('button.srcindex-archivebtn', {
+          title: 'Preserve this source to archive.org',
+          onClick: (e) => {
+            e.stopPropagation();
+            archiveOne(r);
+          },
+        }, icon('archive', 12), ' ARCHIVE'));
+      }
       if (r.url) {
         actCell.appendChild(el('button.iconbtn.ghost', {
           title: 'Copy URL',
@@ -221,85 +231,21 @@
         }, icon('copy', 13)));
       }
 
-      const row = el('div.srcindex-row', {
-        onContextmenu: (e) => {
-          if (!r.url) return;
-          e.preventDefault();
-          openIngestMenu(e, [r]);
-        },
-      }, statusCell, nameCell, urlCell, docCell, actCell);
+      const row = el('div.srcindex-row', statusCell, nameCell, urlCell, docCell, actCell);
       return row;
     }
 
-    // ── Context menu: re-ingest one (or all-visible) URLs into a chosen
-    // draft as fresh exhibits. The bulkImportUrls helper handles dedupe
-    // against the target draft's existing source_urls.
-    function openIngestMenu(e, records) {
-      const prev = document.querySelector('.srcindex-ctxmenu');
-      if (prev) prev.remove();
-
-      const urls = records.map(r => r.url).filter(Boolean);
-      const docs = Store.listDocuments(ws_id);
-      const menu = el('div.context-menu.srcindex-ctxmenu', {
-        style: { left: e.clientX + 'px', top: e.clientY + 'px', minWidth: '260px' },
+    // Open the existing archive consent modal for this source. doc_id
+    // is required by the underlying API but the resulting archive.org
+    // URL is shared workspace-wide via the source record.
+    function archiveOne(r) {
+      if (!window.SourcePanel || !window.SourcePanel.openArchive) {
+        DOM.toast('UNAVAILABLE', 'Archive flow not loaded.', 2500);
+        return;
+      }
+      window.SourcePanel.openArchive(r.doc.id, r.source, {
+        refreshSources: () => { try { render(); } catch (_) {} },
       });
-
-      const header = el('div', { style: { padding: '8px 12px', fontFamily: 'var(--sans)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: 'var(--ink-faint)', borderBottom: '1px solid var(--border)' } },
-        'Re-ingest ' + urls.length + ' URL' + (urls.length === 1 ? '' : 's') + ' into…');
-      menu.appendChild(header);
-
-      function close() { menu.remove(); document.removeEventListener('mousedown', closer); }
-      const closer = (ev) => { if (!menu.contains(ev.target)) close(); };
-
-      if (docs.length === 0) {
-        menu.appendChild(el('div', { style: { padding: '12px', fontFamily: 'var(--sans)', fontSize: '12px', color: 'var(--ink-faint)' } },
-          'No drafts in this workspace. Create one first.'));
-      } else {
-        for (const d of docs) {
-          menu.appendChild(el('div', {
-            onClick: async () => {
-              close();
-              const ok = await DOM.confirmDialog({
-                title: 'Re-ingest into "' + d.title + '"?',
-                body: urls.length === 1
-                  ? 'Will snapshot and add as a new exhibit on this draft. URLs already attached to this draft will be skipped.'
-                  : 'Will snapshot ' + urls.length + ' URLs and add as new exhibits on this draft. URLs already attached will be skipped.',
-                confirmLabel: 'Ingest', cancelLabel: 'Cancel',
-              });
-              if (!ok) return;
-              await ingestUrlsIntoDoc(d.id, urls);
-            },
-          },
-            icon('file-text'),
-            el('div',
-              el('div', d.title || 'Untitled draft'),
-              el('div', { style: { fontSize: '10px', color: 'var(--ink-faint)' } },
-                'v' + (d.version || 1) + ' · ' + Store.listSources(d.id).length + ' exhibit(s)'),
-            ),
-          ));
-        }
-      }
-
-      document.body.appendChild(menu);
-      setTimeout(() => document.addEventListener('mousedown', closer), 0);
-    }
-
-    async function ingestUrlsIntoDoc(target_doc_id, urls) {
-      const wrap = el('div.srcindex-toast');
-      const progress = el('div.bulk-progress');
-      wrap.appendChild(el('div', { style: { fontFamily: 'var(--sans)', fontSize: '12px', fontWeight: 600, marginBottom: '6px' } },
-        'Ingesting ' + urls.length + ' URL' + (urls.length === 1 ? '' : 's') + '…'));
-      wrap.appendChild(progress);
-      document.body.appendChild(wrap);
-      try {
-        if (window.SourcePanel && window.SourcePanel.bulkImportUrls) {
-          await window.SourcePanel.bulkImportUrls(target_doc_id, urls, progress, () => {
-            try { render(); } catch (_) {}
-          });
-        }
-      } finally {
-        setTimeout(() => wrap.remove(), 3500);
-      }
     }
 
     function openSourceInWorkspace(doc_id, source_id) {

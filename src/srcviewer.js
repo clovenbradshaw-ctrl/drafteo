@@ -137,6 +137,15 @@
           ),
         ),
         el('div.srcv-actions',
+          (s.mime === 'application/pdf') ? el('button.srcv-btn.preserve', {
+            title: 'Copy a passage from the PDF, then click to paste-and-cite',
+            onClick: () => openPdfPassageDialog({
+              ws_id: window.__currentWs,
+              source: s,
+              source_id,
+              doc_id,
+            }),
+          }, icon('scissors'), el('span', 'Cite passage')) : null,
           viewUrl ? el('a.srcv-btn', { href: viewUrl, target: '_blank', rel: 'noopener' }, icon('arrow-square-out'), el('span', 'Open')) : null,
           viewUrl ? el('a.srcv-btn', { href: viewUrl, download: s.filename }, icon('download-simple'), el('span', 'Download')) : null,
           s.source_url ? el('a.srcv-btn', { href: s.source_url, target: '_blank', rel: 'noopener' }, icon('link'), el('span', 'Original')) : null,
@@ -319,6 +328,10 @@
       }
       // PDFs: browsers render natively from blob URLs in iframes
       // (Brave shields can block — fall back to archive.org URL if archived).
+      // The native PDF viewer is a browser plugin, so we can't attach
+      // selectionchange/contextmenu inside it. Surface a manual "Cite a
+      // passage" affordance above the iframe — the user copies text from
+      // the PDF, then pastes it into the dialog with a page number.
       if (mime === 'application/pdf') {
         const src = inlineUrl;
         if (!src) { body.appendChild(el('div.srcv-empty', 'No PDF source available.')); return; }
@@ -515,6 +528,102 @@
       // Clear bar after launching dialog so it doesn't sit there blocking.
       bar.style.display = 'none';
     }
+  }
+
+  // Modal: paste-the-passage flow for PDFs (and anywhere a live DOM
+  // selection isn't available). Asks for the passage text and an
+  // optional page/location, auto-fills from clipboard when possible,
+  // then hands off to the standard "Save as cited text" dialog.
+  function openPdfPassageDialog(opts) {
+    const { ws_id, source, source_id, doc_id } = opts;
+    if (!ws_id) { DOM.toast('NO WORKSPACE', 'Open a workspace first.'); return; }
+
+    const scrim = el('div.scrim', { onClick: (e) => { if (e.target === scrim) close(); } });
+    function close() { scrim.remove(); document.removeEventListener('keydown', onKey); }
+    function onKey(e) { if (e.key === 'Escape') close(); }
+
+    const passageTa = el('textarea', {
+      rows: 6,
+      placeholder: 'Paste the passage you selected in the PDF here (⌘V / Ctrl-V).',
+      style: { width: '100%', fontFamily: 'var(--serif)', fontSize: '14px', lineHeight: '1.55' },
+    });
+    const pageInp = el('input', { type: 'text', placeholder: 'e.g. p. 2  ·  § C  ·  ¶ "Beginning July 1, 2017"' });
+    const charsHint = el('div', { style: { fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-faint)', marginTop: '4px' } }, '0 chars');
+    passageTa.addEventListener('input', () => {
+      const n = (passageTa.value || '').length;
+      charsHint.textContent = n + ' char' + (n === 1 ? '' : 's');
+    });
+
+    // Try to prefill from clipboard. Most browsers gate this behind a user
+    // gesture; this modal opens from a click so we have permission.
+    (async () => {
+      try {
+        if (navigator.clipboard && navigator.clipboard.readText) {
+          const t = (await navigator.clipboard.readText() || '').trim();
+          // Heuristic: only auto-fill if it looks like a passage (>= 8 chars,
+          // not obviously a URL).
+          if (t && t.length >= 8 && !/^https?:\/\/\S+$/i.test(t)) {
+            passageTa.value = t;
+            passageTa.dispatchEvent(new Event('input'));
+          }
+        }
+      } catch (_) { /* permission denied — fine, user can paste manually */ }
+      setTimeout(() => passageTa.focus(), 30);
+    })();
+
+    function next() {
+      const text = (passageTa.value || '').trim();
+      if (!text) { passageTa.focus(); DOM.toast('PASTE A PASSAGE', 'Copy text from the PDF, then paste it here.', 3000); return; }
+      const page = pageInp.value.trim();
+      const ctxBefore = page ? ('[' + page + '] ') : '';
+      close();
+      openSaveExhibitDialog({
+        ws_id,
+        text,
+        char_start: null,
+        char_end: null,
+        context_before: ctxBefore,
+        context_after: '',
+        source_id,
+        doc_id,
+        source,
+      });
+    }
+
+    const modal = el('div.modal', { style: { width: 'min(620px, 96vw)' }, onClick: (e) => e.stopPropagation() },
+      el('div.m-head',
+        el('div',
+          el('div.ttl', 'Cite a PDF passage'),
+          el('div.sub', 'Selections inside the browser\'s native PDF viewer aren\'t visible to the app — paste the passage below.'),
+        ),
+        el('button.ghost', { onClick: close }, '✕'),
+      ),
+      el('div.m-body',
+        el('label', 'Passage'),
+        passageTa,
+        charsHint,
+        el('label', { style: { marginTop: '10px' } }, 'Page or location (optional)'),
+        pageInp,
+        source ? el('div', { style: { marginTop: '14px', padding: '10px 12px', background: 'var(--chrome-2)', border: '1px solid var(--border)', borderRadius: '4px', fontFamily: 'var(--sans)', fontSize: '12px', color: 'var(--ink-dim)' } },
+          el('div', { style: { fontWeight: 600, color: 'var(--ink)', marginBottom: '4px' } }, source.title || source.filename),
+          source.archive_org_url
+            ? el('div', icon('check-circle', 11), ' Archived — citation will be permanent.')
+            : el('div', { style: { color: 'var(--warn)' } }, icon('warning', 11), ' Not yet archived — preserve to archive.org to make this citation immutable.'),
+        ) : null,
+      ),
+      el('div.m-foot',
+        el('div', { style: { fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-faint)' } },
+          'Next step: confirm provenance & save as cited text.'),
+        el('div.actions',
+          el('button.ghost', { onClick: close }, 'Cancel'),
+          el('button.primary', { onClick: next }, icon('scissors', 12), ' Continue'),
+        ),
+      ),
+    );
+
+    scrim.appendChild(modal);
+    document.body.appendChild(scrim);
+    document.addEventListener('keydown', onKey);
   }
 
   // Dialog: confirm-and-enrich save. Shows the quote with surrounding context,
