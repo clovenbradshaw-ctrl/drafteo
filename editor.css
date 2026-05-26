@@ -464,6 +464,89 @@ input[type="radio"] {
 .editor .srclist { display: flex; flex-direction: column; gap: 10px; }
 .editor .cmtlist { display: flex; flex-direction: column; gap: 10px; }
 
+/* --- bulk import progress (sources panel + workspace modal) --- */
+.bulk-progress {
+  display: flex; flex-direction: column; gap: 4px;
+  margin: 8px 0 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  max-height: 220px; overflow-y: auto;
+}
+.bulk-progress .bp-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  background: var(--chrome-2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  min-width: 0;
+}
+.bulk-progress .bp-label {
+  flex: 1; min-width: 0;
+  color: var(--ink-dim);
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+.bulk-progress .bp-status {
+  flex-shrink: 0;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 1px 6px;
+  border-radius: 2px;
+  white-space: nowrap;
+  max-width: 50%;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.bulk-progress .bp-status.bp-queued { color: var(--ink-faint); background: var(--chrome-3); }
+.bulk-progress .bp-status.bp-working { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.bulk-progress .bp-status.bp-ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.bulk-progress .bp-status.bp-error { color: var(--err); background: color-mix(in srgb, var(--err) 14%, transparent); }
+
+/* --- paste-detected URL banner --- */
+.paste-url-banner {
+  margin: 8px 16px 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--chrome-2));
+  border-radius: 4px;
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--ink);
+  animation: paste-banner-in 180ms ease-out;
+}
+@keyframes paste-banner-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.paste-url-banner .pub-row {
+  display: flex; align-items: center; gap: 8px;
+}
+.paste-url-banner .pub-row i.ph { color: var(--accent); font-size: 14px; flex-shrink: 0; }
+.paste-url-banner .pub-head {
+  flex: 1; min-width: 0;
+  font-weight: 600;
+}
+.paste-url-banner .pub-actions {
+  display: flex; gap: 6px; flex-shrink: 0;
+}
+.paste-url-banner .pub-actions button {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 3px;
+}
+.paste-url-banner .pub-list {
+  margin-top: 6px;
+  display: flex; flex-direction: column; gap: 2px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-dim);
+}
+.paste-url-banner .pub-url {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.paste-url-banner .pub-more { color: var(--ink-faint); font-style: italic; }
+
 /* --- source card --- */
 .srccard {
   border: 1px solid var(--border);
@@ -488,7 +571,9 @@ input[type="radio"] {
   margin-bottom: 8px;
   letter-spacing: 0;
 }
-.srccard .r1 { display: flex; gap: 10px; align-items: flex-start; }
+.srccard { min-width: 0; }
+.srccard .r1 { display: flex; gap: 10px; align-items: flex-start; min-width: 0; }
+.srccard .r1 > div:last-child { flex: 1; min-width: 0; }
 .srccard .fileico {
   flex-shrink: 0;
   width: 32px; height: 32px;
@@ -504,6 +589,8 @@ input[type="radio"] {
   color: var(--ink);
   line-height: 1.3;
   display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 .srccard .meta {
   font-family: var(--sans);
@@ -511,6 +598,7 @@ input[type="radio"] {
   color: var(--ink-faint);
   margin-top: 3px;
   letter-spacing: 0; text-transform: none;
+  overflow-wrap: anywhere;
 }
 .srccard .desc {
   margin-top: 8px;
@@ -518,6 +606,7 @@ input[type="radio"] {
   font-size: 12px;
   line-height: 1.5;
   font-family: var(--sans);
+  overflow-wrap: anywhere;
 }
 .srccard .tags {
   margin-top: 8px;

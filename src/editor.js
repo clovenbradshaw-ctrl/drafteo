@@ -752,6 +752,93 @@
     // ---- listeners ----
     body.addEventListener('input', () => markDirty());
     body.addEventListener('blur', () => { if (dirty) doSave(); });
+
+    // ---- detect URLs in pasted text ----
+    body.addEventListener('paste', (e) => {
+      // Read plain text from clipboard without blocking the native paste —
+      // we only inspect, not interfere. (User's existing paste lands as
+      // usual; we just look for URLs and offer to import.)
+      try {
+        const data = e.clipboardData || window.clipboardData;
+        if (!data) return;
+        const text = data.getData('text/plain') || data.getData('text/html') || '';
+        if (!text) return;
+        const urls = window.SourcePanel && window.SourcePanel.extractUrlsFromText
+          ? window.SourcePanel.extractUrlsFromText(text)
+          : [];
+        if (urls.length === 0) return;
+        // Filter out URLs already attached as sources for this doc.
+        const existing = new Set((Store.listSources(doc_id) || []).map(s => s.source_url).filter(Boolean));
+        const fresh = urls.filter(u => !existing.has(u));
+        if (fresh.length === 0) return;
+        // Defer so the actual paste lands first, then surface the prompt.
+        setTimeout(() => offerImportPastedUrls(fresh), 0);
+      } catch (_) { /* never break paste */ }
+    });
+
+    let pasteBanner = null;
+    function offerImportPastedUrls(urls) {
+      // Coalesce: if a banner is already showing, merge in the new URLs.
+      if (pasteBanner) {
+        const set = new Set(pasteBanner._urls);
+        for (const u of urls) set.add(u);
+        pasteBanner._urls = Array.from(set);
+        pasteBanner._render();
+        return;
+      }
+      const banner = el('div.paste-url-banner');
+      banner._urls = urls.slice();
+      const list = el('div.pub-list');
+      const headline = el('div.pub-head');
+      const importBtn = el('button.primary', 'Import as sources');
+      const dismissBtn = el('button.ghost', 'Dismiss');
+
+      function close() {
+        if (pasteBanner === banner) pasteBanner = null;
+        banner.remove();
+      }
+      banner._render = function () {
+        headline.textContent = banner._urls.length === 1
+          ? 'Detected 1 URL in your paste'
+          : 'Detected ' + banner._urls.length + ' URLs in your paste';
+        clear(list);
+        for (const u of banner._urls.slice(0, 5)) {
+          list.appendChild(el('div.pub-url', u));
+        }
+        if (banner._urls.length > 5) {
+          list.appendChild(el('div.pub-more', '+ ' + (banner._urls.length - 5) + ' more'));
+        }
+      };
+      banner.appendChild(el('div.pub-row',
+        el('i.ph.ph-link-simple'),
+        headline,
+        el('div.pub-actions', importBtn, dismissBtn),
+      ));
+      banner.appendChild(list);
+
+      dismissBtn.addEventListener('click', close);
+      importBtn.addEventListener('click', async () => {
+        importBtn.disabled = true; dismissBtn.disabled = true;
+        importBtn.textContent = 'Importing…';
+        const progress = el('div.bulk-progress');
+        banner.appendChild(progress);
+        try {
+          await window.SourcePanel.bulkImportUrls(doc_id, banner._urls, progress, () => {
+            if (sourceRefresh) sourceRefresh();
+          });
+        } finally {
+          importBtn.textContent = 'Done';
+          setTimeout(close, 2200);
+        }
+      });
+
+      pasteBanner = banner;
+      banner._render();
+      page.parentElement.insertBefore(banner, page);
+      // Auto-dismiss after 30 s if untouched.
+      setTimeout(() => { if (pasteBanner === banner) close(); }, 30000);
+    }
+
     titleInput.addEventListener('blur', () => { if (dirty) doSave(); });
     dekInput.addEventListener('blur', () => { if (dirty) doSave(); });
     window.addEventListener('keydown', (e) => {
