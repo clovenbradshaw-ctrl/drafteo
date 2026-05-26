@@ -98,7 +98,7 @@
           buf.push(lines[i].replace(/^>\s?/, ''));
           i++;
         }
-        out.push('<blockquote>' + inlineFmt(buf.join('<br/>'), footnoteMap) + '</blockquote>');
+        out.push('<blockquote>' + buf.map(l => inlineFmt(l, footnoteMap)).join('<br/>') + '</blockquote>');
         continue;
       }
 
