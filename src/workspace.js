@@ -26,6 +26,7 @@
     if (!tabs || !tabs.open) tabs = { open: [], active: null };
     tabs.open = (tabs.open || []).filter(id => {
       if (id === '__corkboard__') return true;
+      if (id === '__sources_index__') return true;
       if (typeof id === 'string' && id.indexOf('__src__:') === 0) {
         const parsed = parseSourceTabKey(id);
         return !!(parsed && Store.getSource(parsed.doc_id, parsed.source_id));
@@ -96,6 +97,16 @@
         el('span.kbd', String(Store.listEvidence(ws_id).length || '')),
       );
       sidebar.appendChild(corkBtn);
+
+      // Source URLs button — opens a flat list of every source's name + canonical URL
+      const allSourcesCount = Store.listDocuments(ws_id)
+        .reduce((n, d) => n + Store.listSources(d.id).length, 0);
+      const srcIndexBtn = el('button.ws-search', { style: { borderTop: 0 }, onClick: () => openSourcesIndex() },
+        icon('link-simple'),
+        el('span', 'Source URLs'),
+        el('span.kbd', String(allSourcesCount || '')),
+      );
+      sidebar.appendChild(srcIndexBtn);
 
       // Drafts section
       const draftsSection = el('div.ws-section');
@@ -431,6 +442,8 @@
         let label, ic;
         if (id === '__corkboard__') {
           label = 'Corkboard'; ic = 'squares-four';
+        } else if (id === '__sources_index__') {
+          label = 'Source URLs'; ic = 'link-simple';
         } else if (typeof id === 'string' && id.indexOf('__src__:') === 0) {
           const parsed = parseSourceTabKey(id);
           if (!parsed) continue;
@@ -590,6 +603,17 @@
       content.appendChild(window.Corkboard.open(ws_id, app));
     }
 
+    function openSourcesIndex() {
+      tabs.active = '__sources_index__';
+      if (!tabs.open.includes('__sources_index__')) tabs.open.push('__sources_index__');
+      saveTabs();
+      renderTabs();
+      renderContent();
+      renderSidebar();
+    }
+    // Let other views (like SourcesIndex) reuse the source-tab opener.
+    window.__openSourceTab = (doc_id, source_id) => openSource(doc_id, source_id);
+
     function openSource(doc_id, source_id) {
       const key = sourceTabKey(doc_id, source_id);
       if (!tabs.open.includes(key)) tabs.open.push(key);
@@ -605,6 +629,10 @@
       clear(content);
       if (tabs.active === '__corkboard__') {
         content.appendChild(window.Corkboard.open(ws_id, app));
+        return;
+      }
+      if (tabs.active === '__sources_index__') {
+        content.appendChild(window.SourcesIndex.open(ws_id, app));
         return;
       }
       if (typeof tabs.active === 'string' && tabs.active.indexOf('__src__:') === 0) {
