@@ -535,23 +535,60 @@ export const Store = {
     return Store.getSource(doc_id, anchor) || { source_id: anchor, ...payload };
   },
 
-  /** URL-only source — no media upload. */
+  /**
+   * Snapshot a web page: fetch via the n8n feed proxy, sanitise the HTML,
+   * encrypt the cleaned snapshot, upload the ciphertext to the homeserver
+   * media repo, and INS a source carrying the mxc + source_url metadata.
+   * The plaintext (cleaned HTML) never leaves the client unencrypted.
+   *
+   * Caller can later run archiveSource() to push the snapshot to
+   * archive.org via the archiveo webhook for permanent citation.
+   */
   async importFromUrl(doc_id, url) {
     if (!url) throw new Error('URL required');
+    const trimmed = String(url).trim();
+    if (!/^https?:\/\//i.test(trimmed)) {
+      throw new Error('URL must start with http(s)://');
+    }
     const session = await ensureDocumentSession(doc_id);
     void session;
-    const trimmed = String(url).trim();
+    const client = getClient();
+    if (!client) throw new Error('Not connected');
+
+    const proxyUrl = 'https://n8n.intelechia.com/webhook/feed?url=' + encodeURIComponent(trimmed);
+    let raw;
+    try {
+      const res = await fetch(proxyUrl);
+      if (!res.ok) throw new Error('Proxy returned ' + res.status);
+      raw = await res.text();
+    } catch (e) {
+      throw new Error('Fetch failed: ' + (e.message || e));
+    }
+    const snap = sanitiseHtml(raw, trimmed);
+
+    const plaintext = new TextEncoder().encode(snap.html).buffer;
+    const { data: ciphertext, info } = await encryptAttachment(plaintext);
+    const blob = new Blob([ciphertext], { type: 'application/octet-stream' });
+    const resp = await client.uploadContent(blob, {
+      name: snap.filename,
+      type: 'application/octet-stream',
+    });
+    const mxc = typeof resp === 'string' ? resp : (resp.content_uri || resp);
+
+    const nowMs = Date.now();
     const payload = {
-      title: trimmed,
-      filename: trimmed.replace(/^https?:\/\//, '').slice(0, 80),
+      title: snap.title,
+      filename: snap.filename,
       mime: 'text/html',
-      size_bytes: 0,
-      uploaded_at: Date.now(),
-      mxc_uri: null,
-      encryption_info: null,
+      size_bytes: new Blob([snap.html]).size,
+      uploaded_at: nowMs,
+      snapshot_at: nowMs,
+      mxc_uri: mxc,
+      encryption_info: info,
       source_url: trimmed,
-      description: '',
-      tags: [],
+      description: 'Web snapshot of ' + trimmed,
+      tags: ['web-snapshot'],
+      plaintext: (snap.plaintext || '').slice(0, 200000),
       hidden: false,
       deleted: false,
     };
@@ -581,39 +618,127 @@ export const Store = {
   },
 
   /**
-   * Archive flow: opens the Wayback Machine save endpoint in a new tab,
-   * then prompts for the resulting archive URL. Wayback's CORS policy
-   * blocks programmatic reads of the save response from a browser, so
-   * the user pastes the URL back when the save finishes.
+   * Archive flow — uploads to the n8n archiveo webhook, which PUTs to
+   * archive.org and returns the resulting identifier + URL. onProgress is
+   * called with { stage, pct, sent, total, label } as the upload and
+   * remote-processing phases advance. Stages: 'preparing' | 'uploading'
+   * | 'processing' | 'done'. Throws on transport/HTTP/payload failure
+   * so the caller can surface the real error.
    */
   async archiveSource(doc_id, source_id, onProgress) {
     const s = Store.getSource(doc_id, source_id);
     if (!s) throw new Error('source not found');
-    const target = s.source_url || (s.mxc_uri ? null : null);
-    if (!target) {
-      // No URL to archive. The file is already preserved on the homeserver
-      // and encrypted; for now we surface this as an error so the caller
-      // knows. Phase 6 may pipe file→Wayback via a server proxy.
-      throw new Error('archive.org only accepts URL sources for now');
+    if (!s.mxc_uri) {
+      throw new Error('Source has no preserved binary to archive.');
     }
-    onProgress && onProgress('opening Wayback Machine…');
-    const saveUrl = `https://web.archive.org/save/${encodeURI(target)}`;
-    try { window.open(saveUrl, '_blank', 'noopener'); } catch (_) {}
-    const archived = (typeof prompt === 'function') ? prompt(
-      'After the Wayback Machine finishes saving, copy the resulting URL\n' +
-      '(it starts with https://web.archive.org/web/) and paste it here:',
-      ''
-    ) : null;
-    if (!archived) {
-      onProgress && onProgress('cancelled');
-      return Store.getSource(doc_id, source_id);
+    const prog = typeof onProgress === 'function' ? onProgress : () => {};
+
+    prog({ stage: 'preparing', pct: 0, label: 'Preparing binary…' });
+
+    // Fetch + decrypt the source binary so n8n receives the plaintext.
+    const client = getClient();
+    if (!client) throw new Error('Not connected');
+    const httpUrl = client.mxcUrlToHttp(s.mxc_uri);
+    if (!httpUrl) throw new Error('Could not resolve mxc URL.');
+    const cipherResp = await fetch(httpUrl);
+    if (!cipherResp.ok) throw new Error('media fetch failed: HTTP ' + cipherResp.status);
+    const cipherBuf = await cipherResp.arrayBuffer();
+    let plaintextBuf = cipherBuf;
+    if (s.encryption_info) {
+      plaintextBuf = await decryptAttachment(cipherBuf, s.encryption_info);
     }
-    onProgress && onProgress('recording archive…');
+    const blob = new Blob([plaintextBuf], { type: s.mime || 'application/octet-stream' });
+
+    const fd = new FormData();
+    fd.append('data', blob, asciiSafe(s.filename));
+    let kind = 'source';
+    if (s.source_url) kind = 'document';
+    else if (s.mime && (s.mime.startsWith('video/') || s.mime.startsWith('audio/') || s.mime.startsWith('image/'))) kind = 'media';
+    else if (s.mime && (s.mime.includes('csv') || s.mime.includes('json') || s.mime === 'application/x-ndjson')) kind = 'dataset';
+    else if (s.mime && (s.mime === 'application/pdf' || s.mime.startsWith('text/') || s.mime.includes('officedocument'))) kind = 'document';
+    fd.append('kind', kind);
+    fd.append('mime', s.mime || 'application/octet-stream');
+    fd.append('filename', asciiSafe(s.filename));
+    fd.append('title', asciiSafe(s.title || s.filename));
+    fd.append('description', asciiSafe(s.description || (s.source_url ? 'Web snapshot of ' + s.source_url : '')));
+    fd.append('license', 'CC-BY-4.0');
+    fd.append('consent_acknowledged', 'permanence');
+    fd.append('consent_acknowledged', 'privacy');
+    fd.append('consent_acknowledged', 'rights');
+    if (s.tags && s.tags.length) fd.append('tags', s.tags.join(';'));
+    if (s.source_url) fd.append('parent_identifier', s.source_url);
+
+    const ARCHIVE_URL = 'https://n8n.intelechia.com/webhook/archiveo';
+    const { status, raw } = await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', ARCHIVE_URL);
+      let waitTimer = null;
+      let waitStart = 0;
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) {
+          const pct = Math.min(99, Math.round((e.loaded / e.total) * 100));
+          prog({ stage: 'uploading', pct, sent: e.loaded, total: e.total, label: 'Uploading to archive.org…' });
+        } else {
+          prog({ stage: 'uploading', pct: 0, label: 'Uploading to archive.org…' });
+        }
+      });
+      xhr.upload.addEventListener('load', () => {
+        waitStart = Date.now();
+        prog({ stage: 'processing', pct: 0, label: 'Archive.org is processing the file…' });
+        // Synthetic creep — we don't know the real ETA, so plateau near 95%.
+        waitTimer = setInterval(() => {
+          const elapsed = (Date.now() - waitStart) / 1000;
+          const pct = Math.min(95, Math.round((1 - Math.exp(-elapsed / 12)) * 95));
+          prog({ stage: 'processing', pct, label: 'Archive.org is processing the file…' });
+        }, 400);
+      });
+      xhr.addEventListener('load', () => {
+        if (waitTimer) clearInterval(waitTimer);
+        resolve({ status: xhr.status, raw: xhr.responseText || '' });
+      });
+      xhr.addEventListener('error', () => {
+        if (waitTimer) clearInterval(waitTimer);
+        reject(new Error('Could not reach archive endpoint.'));
+      });
+      xhr.addEventListener('abort', () => {
+        if (waitTimer) clearInterval(waitTimer);
+        reject(new Error('Archive request aborted.'));
+      });
+      xhr.send(fd);
+    });
+
+    let result = null;
+    try { result = raw ? JSON.parse(raw) : null; } catch (_) {}
+
+    if (status < 200 || status >= 300) {
+      const msg = (result && (result.errors || result.error || result.message)) || ('HTTP ' + status + (raw ? ' · ' + raw.slice(0, 160) : ''));
+      throw new Error(Array.isArray(msg) ? msg.join(', ') : msg);
+    }
+    if (!result || result.success === false) {
+      const msg = (result && (result.errors || result.error)) || 'Archive endpoint returned no payload.';
+      throw new Error(Array.isArray(msg) ? msg.join(', ') : msg);
+    }
+
+    const archive = result.archive || result;
+    const ident = archive.identifier;
+    const url = archive.url;
+    if (!ident || !url) {
+      throw new Error('Archive response missing identifier/url.');
+    }
+
     await Store.updateSource(doc_id, source_id, {
-      archive_org_url: archived.trim(),
+      archive_org_url: url,
+      archive_org_identifier: ident,
+      archive_org_filename: archive.filename || s.filename,
       archived_at: Date.now(),
     });
-    onProgress && onProgress('done');
+
+    prog({ stage: 'done', pct: 100, label: 'Archived ✓' });
+    try {
+      window.dispatchEvent(new CustomEvent('drafteo:source-archived', {
+        detail: { doc_id, source_id, archive_org_url: url, archive_org_identifier: ident },
+      }));
+    } catch (_) {}
     return Store.getSource(doc_id, source_id);
   },
 
@@ -661,15 +786,24 @@ export const Store = {
     return ins(ws_id, ENTITY.EXHIBIT, {
       label:    (payload?.label || '').trim(),
       text:     (payload?.text  || '').trim(),
+      note:     (payload?.note  || '').trim(),
       source_id: payload?.source_id || null,
       doc_id:   payload?.doc_id   || null,
       tags:     Array.isArray(payload?.tags) ? payload.tags : [],
+      char_start: payload?.char_start ?? null,
+      char_end:   payload?.char_end   ?? null,
+      context_before: payload?.context_before || '',
+      context_after:  payload?.context_after  || '',
+      provenance: payload?.provenance || null,
       created_at: Date.now(),
+      author: currentSession?.matrix_id || null,
       deleted: false,
     });
   },
   async updateExhibit(ws_id, id, patch) {
-    const allowed = ['label', 'text', 'tags'];
+    const allowed = ['label', 'text', 'note', 'tags',
+                     'char_start', 'char_end',
+                     'context_before', 'context_after', 'provenance'];
     for (const k of Object.keys(patch || {})) {
       if (!allowed.includes(k)) continue;
       await def(ws_id, id, k, patch[k]);
@@ -1164,11 +1298,114 @@ function exhibitCard(e) {
     id: e._anchor,
     label: e.label || '',
     text: e.text || '',
+    note: e.note || '',
     source_id: e.source_id || null,
     doc_id: e.doc_id || null,
     tags: Array.isArray(e.tags) ? e.tags : [],
+    char_start: e.char_start ?? null,
+    char_end:   e.char_end   ?? null,
+    context_before: e.context_before || '',
+    context_after:  e.context_after  || '',
+    provenance: e.provenance || null,
+    author: e.author || e._sender || null,
     created_at: e.created_at || e._created || Date.now(),
   };
+}
+
+// ── Source-snapshot helpers ──
+
+// n8n writes title/description/filename into archive.org S3 headers, which
+// reject any non-ASCII byte. Replace common Unicode punctuation, then drop
+// the rest.
+function asciiSafe(s) {
+  if (!s) return '';
+  return String(s)
+    .replace(/[‘’‚‛]/g, "'")
+    .replace(/[“”„‟]/g, '"')
+    .replace(/[–—―]/g, '-')
+    .replace(/…/g, '...')
+    .replace(/ /g, ' ')
+    .replace(/[ --￿]/g, '')
+    .trim();
+}
+
+function filenameFromUrl(url) {
+  try {
+    const u = new URL(url);
+    const slug = (u.hostname + u.pathname)
+      .replace(/[^a-z0-9]+/gi, '-')
+      .replace(/^-+|-+$/g, '')
+      .toLowerCase()
+      .slice(0, 80) || 'webpage';
+    return slug + '.html';
+  } catch (_) {
+    return 'webpage.html';
+  }
+}
+
+// Strip scripts/iframes/event handlers, resolve relative URLs against the
+// source page, and extract a readable plaintext from <article>/<main>/<body>.
+function sanitiseHtml(rawHtml, sourceUrl) {
+  let doc;
+  try {
+    const parser = new DOMParser();
+    doc = parser.parseFromString(rawHtml, 'text/html');
+  } catch (_) {
+    return {
+      html: '<html><body><pre>' + rawHtml.replace(/</g, '&lt;') + '</pre></body></html>',
+      title: sourceUrl,
+      filename: filenameFromUrl(sourceUrl),
+      plaintext: rawHtml,
+    };
+  }
+
+  doc.querySelectorAll('script, iframe, noscript, object, embed, link[rel="preload"][as="script"]').forEach((n) => n.remove());
+  doc.querySelectorAll('*').forEach((node) => {
+    for (const a of [...node.attributes]) {
+      if (a.name.startsWith('on')) node.removeAttribute(a.name);
+      if (a.name === 'srcset') node.removeAttribute(a.name);
+    }
+  });
+
+  let base;
+  try { base = new URL(sourceUrl); } catch (_) { base = null; }
+  if (base) {
+    doc.querySelectorAll('[href]').forEach((n) => {
+      try { n.setAttribute('href', new URL(n.getAttribute('href'), base).href); } catch (_) {}
+    });
+    doc.querySelectorAll('[src]').forEach((n) => {
+      try { n.setAttribute('src', new URL(n.getAttribute('src'), base).href); } catch (_) {}
+    });
+    const baseTag = doc.createElement('base');
+    baseTag.href = base.origin + '/';
+    doc.head && doc.head.prepend(baseTag);
+  }
+
+  const title = (doc.querySelector('title') && doc.querySelector('title').textContent.trim()) || sourceUrl;
+  const html = '<!doctype html>\n<!-- Snapshot captured ' + new Date().toISOString()
+    + ' from ' + sourceUrl + ' by DraftEO -->\n' + doc.documentElement.outerHTML;
+
+  let plaintextRoot = doc.querySelector('article') || doc.querySelector('main') || doc.body;
+  if (plaintextRoot && plaintextRoot !== doc.body) {
+    // good — already a clean subtree
+  } else if (doc.body) {
+    const clone = doc.body.cloneNode(true);
+    clone.querySelectorAll('nav, header, footer, aside, form, button, [role="navigation"], [role="banner"], [role="contentinfo"], [aria-hidden="true"]').forEach((n) => n.remove());
+    plaintextRoot = clone;
+  }
+  const rawText = (plaintextRoot && (plaintextRoot.innerText || plaintextRoot.textContent) || '').trim();
+  const plaintext = rawText
+    .split('\n')
+    .map((l) => l.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .reduce((acc, line) => {
+      if (acc.length && acc[acc.length - 1] === line) return acc;
+      acc.push(line);
+      return acc;
+    }, [])
+    .join('\n');
+
+  return { html, title, plaintext, filename: filenameFromUrl(sourceUrl) };
 }
 
 function documentCard(r, docEntity) {
