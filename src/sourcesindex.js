@@ -46,6 +46,15 @@
       el('option', { value: 'none' }, 'Local file (no URL)'),
     );
 
+    const exploreBtn = el('button.ghost', {
+      onClick: () => {
+        if (window.SourceExplorer && window.SourceExplorer.open) {
+          window.SourceExplorer.open(ws_id, {});
+        }
+      },
+      title: 'Open the source explorer: search, scrub, and grab passages',
+    }, icon('magnifying-glass-plus'), ' EXPLORE');
+
     const copyAllBtn = el('button.ghost', {
       onClick: copyAllUrls,
       title: 'Copy every visible URL to the clipboard, one per line',
@@ -61,6 +70,7 @@
       ),
       el('div.srcindex-actions',
         statusFilter,
+        exploreBtn,
         copyAllBtn,
       ),
     );

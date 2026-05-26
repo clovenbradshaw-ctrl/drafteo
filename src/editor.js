@@ -871,6 +871,29 @@
         el('div.m-body',
           el('label', 'Source'),
           searchInp,
+          el('button.cite-explore-link', {
+            type: 'button',
+            title: 'Open the full source explorer pre-filtered by the selected text — search inside any source and grab a span',
+            onClick: () => {
+              if (!window.SourceExplorer || !window.SourceExplorer.open) return;
+              const ws = window.__currentWs;
+              if (!ws) return;
+              window.SourceExplorer.open(ws, {
+                initialQuery: (searchInp.value || draftQuote || '').slice(0, 80),
+                onPick: ({ text, source, doc_id: did, source_id: sid }) => {
+                  // Map the picked source onto the cite picker's "chosen" state
+                  // — if the source is in the current doc's list, select it;
+                  // otherwise the passage stages and the user picks a source
+                  // from the list manually.
+                  const match = sources.find(s => s.source_id === sid);
+                  if (match) { chosen = match; refreshPick(); }
+                  passageTa.value = text;
+                  renderPreview();
+                  void did;
+                },
+              });
+            },
+          }, icon('magnifying-glass-plus', 12), ' Open source explorer (search inside any source)…'),
           list,
           el('label', 'Page or location (optional)'),
           pageInp,

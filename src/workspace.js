@@ -83,10 +83,15 @@
       clear(sidebar);
       sidebar.appendChild(workspaceHeader(ws, app, () => render(ws_id, tabs.active, app)));
 
-      // Search button
-      const searchBtn = el('button.ws-search', { onClick: () => window.SearchSources.open(ws_id, app) },
+      // Search button — opens the full Source Explorer (Cmd/K shortcut).
+      const searchBtn = el('button.ws-search', {
+        onClick: () => {
+          if (window.SourceExplorer && window.SourceExplorer.open) window.SourceExplorer.open(ws_id, {});
+          else window.SearchSources.open(ws_id, app);
+        },
+      },
         icon('magnifying-glass'),
-        el('span', 'Search exhibits…'),
+        el('span', 'Explore sources…'),
         el('span.kbd', '⌘K'),
       );
       sidebar.appendChild(searchBtn);

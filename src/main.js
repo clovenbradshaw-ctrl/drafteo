@@ -36,6 +36,7 @@ import './editor.js';
 import './corkboard.js';
 import './sourcesindex.js';
 import './exhibitsindex.js';
+import './explorer.js';
 import './search.js';
 import './exporter.js';
 import './projects.js';
