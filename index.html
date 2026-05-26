@@ -17,6 +17,17 @@
 <link rel="stylesheet" href="corkboard.css" />
 <link rel="stylesheet" href="srcviewer.css" />
 <link rel="stylesheet" href="explorer.css" />
+<link rel="stylesheet" href="exhibits.css" />
+<!-- PDF.js for inline PDF rendering with real text selection. Loaded
+     as a plain script so window.pdfjsLib is available synchronously
+     when the Exhibits tab boots. Falls back gracefully if blocked. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+  if (window.pdfjsLib && window.pdfjsLib.GlobalWorkerOptions) {
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  }
+</script>
 </head>
 <body>
 <div id="root"></div>
