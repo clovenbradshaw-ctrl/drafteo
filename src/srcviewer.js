@@ -738,5 +738,5 @@
     setTimeout(() => labelInp.focus(), 80);
   }
 
-  window.SourceViewer = { open };
+  window.SourceViewer = { open, openPdfPassage: openPdfPassageDialog, openSaveExhibit: openSaveExhibitDialog };
 })();

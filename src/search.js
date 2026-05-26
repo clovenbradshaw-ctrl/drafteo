@@ -97,13 +97,16 @@
     setTimeout(() => input.focus(), 40);
   }
 
-  // Global hotkey binding (Cmd/Ctrl + K)
+  // Global hotkey binding (Cmd/Ctrl + K) — prefer the full Source Explorer
+  // when it's available; fall back to the legacy fuzzy-only modal otherwise.
   window.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-      // Determine current workspace from URL state or DraftEO route
       const ws = window.__currentWs;
-      if (ws) {
-        e.preventDefault();
+      if (!ws) return;
+      e.preventDefault();
+      if (window.SourceExplorer && window.SourceExplorer.open) {
+        window.SourceExplorer.open(ws, {});
+      } else {
         open(ws, window.DraftEO && window.DraftEO.app);
       }
     }
