@@ -35,6 +35,7 @@ import './srcviewer.js';
 import './editor.js';
 import './corkboard.js';
 import './sourcesindex.js';
+import './exhibitsindex.js';
 import './search.js';
 import './exporter.js';
 import './projects.js';

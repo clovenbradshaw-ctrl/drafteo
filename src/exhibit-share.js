@@ -261,14 +261,14 @@
         margin-bottom: 14px; }
       .exh-mini-label { font-size: 14px; font-weight: 600; color: #cbd5e1;
         margin-bottom: 18px; letter-spacing: 0.02em; }
-      .exh-mini-quote { font-family: Georgia, "Times New Roman", serif;
-        font-size: 26px; line-height: 1.5; color: #f8fafc;
+      .exh-mini-quote { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        font-size: 17px; line-height: 1.6; color: #e5e7eb;
+        font-weight: 400; font-style: normal;
         text-align: left; margin: 0 auto; max-width: 680px; }
-      .exh-mini-quote .ctx { color: #475569; font-size: 17px;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        font-style: italic; }
-      .exh-mini-quote .borrowed { background: linear-gradient(transparent 62%, rgba(251, 191, 36, 0.55) 62%);
-        padding: 0 4px; color: #fef3c7; font-weight: 500; }
+      .exh-mini-quote .ctx { color: #64748b; font-weight: 400; font-style: normal; }
+      .exh-mini-quote .borrowed { background: rgba(251, 191, 36, 0.18);
+        padding: 0 3px; color: #f8fafc; font-weight: 400; font-style: normal;
+        border-radius: 2px; }
       .exh-mini-note { color: #94a3b8; font-size: 14px; line-height: 1.6;
         margin: 22px auto 0; max-width: 600px; padding-top: 18px;
         border-top: 1px solid #2a2d36; font-style: italic; }
@@ -359,7 +359,7 @@
   async function render(payload, mountEl) {
     ensureStyles();
     document.body.classList.add('exh-mini-body');
-    document.title = (payload.l || payload.t || 'Exhibit').slice(0, 60) + ' · DraftEO';
+    document.title = (payload.l || payload.t || 'Cited text').slice(0, 60) + ' · DraftEO';
 
     const mount = mountEl || document.getElementById('root') || document.body;
     while (mount.firstChild) mount.removeChild(mount.firstChild);
@@ -392,8 +392,8 @@
     const bar = e('div', { class: 'exh-mini-bar' },
       e('a', { class: 'exh-mini-logo', href: base, title: 'Open DraftEO' }, '◆ DraftEO'),
       payload.s
-        ? e('div', { class: 'exh-mini-bar-source' }, 'Exhibit from ', e('strong', null, payload.s))
-        : e('div', { class: 'exh-mini-bar-source' }, 'Exhibit'),
+        ? e('div', { class: 'exh-mini-bar-source' }, 'Cited from ', e('strong', null, payload.s))
+        : e('div', { class: 'exh-mini-bar-source' }, 'Cited text'),
       e('div', { class: 'exh-mini-actions' },
         jumpBtn,
         archiveUrl
@@ -413,7 +413,7 @@
     ) : null;
 
     const hero = e('div', { class: 'exh-mini-hero' },
-      e('div', { class: 'exh-mini-eyebrow' }, payload.l ? 'Exhibit · ' + payload.l : 'Borrowed text'),
+      e('div', { class: 'exh-mini-eyebrow' }, payload.l ? 'Cited text · ' + payload.l : 'Cited text'),
       quoteEl,
       payload.n ? e('div', { class: 'exh-mini-note' }, payload.n) : null,
       originRow,

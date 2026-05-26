@@ -381,7 +381,7 @@
     let captured = '';
     bar.appendChild(el('button', { onMousedown: (e) => e.preventDefault(), onClick: copySel }, icon('copy', 13), el('span', ' Copy')));
     bar.appendChild(el('button.accent', { onMousedown: (e) => e.preventDefault(), onClick: useAsQuote }, icon('quotes', 13), el('span', ' Use as passage')));
-    bar.appendChild(el('button.accent', { onMousedown: (e) => e.preventDefault(), onClick: saveExhibit }, icon('scissors', 13), el('span', ' Save as exhibit')));
+    bar.appendChild(el('button.accent', { onMousedown: (e) => e.preventDefault(), onClick: saveExhibit }, icon('scissors', 13), el('span', ' Save as cited text')));
     document.body.appendChild(bar);
     const sourceDoc = scopeDoc || document;
 
@@ -549,7 +549,7 @@
       if (source.archive_org_url) {
         row('archive.org', el('a', { href: source.archive_org_url, target: '_blank', rel: 'noopener' }, source.archive_org_url));
       } else {
-        row('archive.org', el('span', { style: { color: 'var(--warn)' } }, 'Not yet preserved — exhibit is referenceable but not yet immutable.'));
+        row('archive.org', el('span', { style: { color: 'var(--warn)' } }, 'Not yet preserved — cited text is referenceable but not yet immutable.'));
       }
       row('Mime', source.mime || '—');
       if (source.filename && !source.source_url) row('Filename', source.filename);
@@ -587,15 +587,15 @@
         } : null,
       });
       close();
-      DOM.toast('EXHIBIT SAVED', exhibit.label || ('"' + text.slice(0, 60) + '"'), 4000);
+      DOM.toast('CITED TEXT SAVED', exhibit.label || ('"' + text.slice(0, 60) + '"'), 4000);
       if (window.__refreshSidebar) window.__refreshSidebar();
     }
 
     const modal = el('div.modal.exhibit-modal', { onClick: (e) => e.stopPropagation() },
       el('div.m-head',
         el('div',
-          el('div.ttl', 'Save as exhibit'),
-          el('div.sub', 'Provenance is captured immutably from the source — including the archive.org URL when preserved.'),
+          el('div.ttl', 'Save as cited text'),
+          el('div.sub', 'Provenance is captured immutably from the exhibit — including the archive.org URL when preserved.'),
         ),
         el('button.ghost', { onClick: close }, '✕'),
       ),
@@ -615,10 +615,10 @@
         el('div', { style: { fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-faint)' } },
           source && source.archive_org_url
             ? '⛓ Bound to archive.org — citation is permanent.'
-            : '⚠ Source not yet preserved. Archive it to make this exhibit immutable.'),
+            : '⚠ Exhibit not yet preserved. Archive it to make this cited text immutable.'),
         el('div.actions',
           el('button.ghost', { onClick: close }, 'Cancel'),
-          el('button.primary', { onClick: submit }, icon('scissors', 12), ' Save exhibit'),
+          el('button.primary', { onClick: submit }, icon('scissors', 12), ' Save cited text'),
         ),
       ),
     );
