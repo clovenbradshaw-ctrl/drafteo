@@ -1,0 +1,1202 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DraftEO — Exhibits (mockup v2)</title>
+<link href="https://fonts.googleapis.com/css2?family=Courier+Prime:ital,wght@0,400;0,700;1,400&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css" />
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css" />
+<link rel="stylesheet" href="styles.css" />
+<link rel="stylesheet" href="theme.css" />
+<link rel="stylesheet" href="exhibits.css" />
+<style>
+  /* ─────────────────────────────────────────────────────────────
+     Mockup-only chrome. NOT shipped — exists so a reviewer sees
+     the redesigned Exhibits tab without booting the Matrix stack.
+     The actual app draws the same shapes via the real workspace
+     shell + exhibitsindex.js.
+     ───────────────────────────────────────────────────────────── */
+  html, body { height: 100%; margin: 0; }
+  body { display: flex; flex-direction: column; background: var(--surface); color: var(--ink); }
+  .mock-bar {
+    flex-shrink: 0;
+    padding: 6px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--chrome);
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--ink-faint);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .mock-bar .mock-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  .mock-bar a {
+    margin-left: auto;
+    color: var(--ink-faint);
+    text-decoration: none;
+    text-transform: none;
+    letter-spacing: 0;
+    font-family: var(--sans);
+    font-size: 11px;
+  }
+  .mock-bar a:hover { color: var(--ink); }
+
+  .titlebar-mock {
+    height: 38px;
+    background: var(--chrome);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 14px; padding: 0 18px;
+    font-family: var(--sans); font-size: 12px;
+    color: var(--ink-dim);
+    flex-shrink: 0;
+  }
+  .titlebar-mock .brand { font-family: var(--display); font-weight: 700; font-size: 13px; color: var(--ink); }
+  .titlebar-mock .brand-mark {
+    width: 12px; height: 12px; display: inline-block; vertical-align: -2px;
+    background: var(--accent); transform: rotate(45deg); margin-right: 8px;
+  }
+  .titlebar-mock .crumb-sep { color: var(--ink-faint); margin: 0 4px; }
+  .titlebar-mock .crumb-here { color: var(--ink); }
+  .titlebar-mock .right { margin-left: auto; display: flex; align-items: center; gap: 12px; font-size: 11px; }
+  .titlebar-mock .status {
+    display: inline-flex; align-items: center; gap: 6px;
+    color: var(--ok);
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+  }
+  .titlebar-mock .status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+  .titlebar-mock .user {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--mono); font-size: 10px;
+  }
+  .titlebar-mock .user .av {
+    width: 18px; height: 18px; display: grid; place-items: center;
+    background: var(--accent-deep); color: var(--accent-soft);
+    font-weight: 700;
+  }
+
+  .mock-shell {
+    display: grid;
+    grid-template-columns: 232px 1fr;
+    flex: 1;
+    min-height: 0;
+  }
+
+  /* ── Sidebar: simplified ──────────────────────────────────── */
+  .mock-side {
+    border-right: 1px solid var(--border);
+    background: var(--chrome);
+    overflow-y: auto;
+    font-family: var(--sans);
+    font-size: 12px;
+    display: flex; flex-direction: column;
+  }
+  .ws-header {
+    padding: 14px 14px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .ws-name {
+    font-family: var(--display); font-size: 16px; font-weight: 700; color: var(--ink);
+    letter-spacing: -0.005em;
+  }
+  .ws-desc {
+    font-family: var(--mono); font-size: 10px; color: var(--ink-faint);
+    margin-top: 4px; letter-spacing: 0.04em;
+  }
+  .ws-nav {
+    display: flex; flex-direction: column;
+    border-bottom: 1px solid var(--border);
+  }
+  .ws-nav button {
+    display: flex; align-items: center; gap: 10px;
+    background: transparent; border: 0;
+    width: 100%; text-align: left; padding: 9px 14px;
+    color: var(--ink); cursor: pointer; font-family: var(--sans);
+    font-size: 13px;
+    border-left: 2px solid transparent;
+  }
+  .ws-nav button:hover { background: var(--chrome-2); }
+  .ws-nav button.active { border-left-color: var(--accent); background: var(--chrome-2); color: var(--ink); }
+  .ws-nav button i { color: var(--ink-faint); }
+  .ws-nav button.active i { color: var(--accent); }
+  .ws-nav button .kbd {
+    margin-left: auto;
+    font-family: var(--mono); font-size: 10px;
+    color: var(--ink-faint); letter-spacing: 0.06em;
+    padding: 1px 6px; border: 1px solid var(--border); border-radius: 3px;
+  }
+
+  .ws-section { padding: 10px 0 0; }
+  .ws-section-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 14px;
+    font-family: var(--mono); font-size: 10px;
+    color: var(--ink-faint); letter-spacing: 0.18em; text-transform: uppercase;
+  }
+  .ws-section-head button {
+    background: transparent; border: 0; color: var(--ink-faint);
+    width: 22px; height: 22px; display: grid; place-items: center;
+    cursor: pointer; border-radius: 3px;
+  }
+  .ws-section-head button:hover { color: var(--ink); background: var(--chrome-2); }
+  .ws-section-count {
+    color: var(--ink-faint); margin-left: 6px;
+  }
+
+  .draft-row {
+    display: grid; grid-template-columns: 16px 1fr auto;
+    gap: 10px; padding: 6px 14px;
+    align-items: center;
+    color: var(--ink-dim);
+    cursor: pointer;
+    border-left: 2px solid transparent;
+  }
+  .draft-row:hover { background: var(--chrome-2); color: var(--ink); }
+  .draft-row.active { color: var(--ink); border-left-color: var(--accent); background: var(--chrome-2); }
+  .draft-row .name { font-family: var(--sans); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .draft-row .ver { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); }
+  .draft-row i { font-size: 13px; color: var(--ink-faint); }
+  .draft-row.active i { color: var(--accent); }
+
+  /* ── Tabs strip ───────────────────────────────────────────── */
+  .mock-main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .mock-tabs {
+    display: flex; align-items: stretch;
+    background: var(--chrome); border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    padding: 0 8px;
+    gap: 4px;
+  }
+  .mock-tab {
+    display: flex; align-items: center; gap: 7px;
+    padding: 9px 14px;
+    font-family: var(--sans); font-size: 12.5px;
+    color: var(--ink-faint);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+  }
+  .mock-tab:hover { color: var(--ink-dim); }
+  .mock-tab.active { color: var(--ink); border-bottom-color: var(--accent); }
+  .mock-tab i { color: inherit; }
+
+  /* ── The Exhibits tab redesigned ──────────────────────────── */
+  .exh2 {
+    flex: 1; min-height: 0;
+    display: flex; flex-direction: column;
+    background: var(--surface);
+    overflow: hidden;
+    position: relative;
+  }
+  /* Single-row toolbar — title + count on the left, search dominant on the right. */
+  .exh2-bar {
+    flex-shrink: 0;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 22px;
+    align-items: center;
+    padding: 12px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--chrome);
+  }
+  .exh2-ttl-grp {
+    display: flex; align-items: baseline; gap: 10px;
+  }
+  .exh2-ttl {
+    font-family: var(--display);
+    font-size: 18px; font-weight: 700;
+    color: var(--ink); letter-spacing: -0.01em;
+  }
+  .exh2-ttl-sub {
+    font-family: var(--mono); font-size: 11px;
+    color: var(--ink-faint); letter-spacing: 0.06em;
+  }
+  .exh2-ttl-help {
+    font-family: var(--sans); font-size: 11px;
+    color: var(--ink-faint);
+    margin-left: 16px;
+  }
+  .exh2-search {
+    position: relative;
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    max-width: 640px;
+    margin-left: auto;
+    width: 100%;
+  }
+  .exh2-search:focus-within { border-color: var(--accent); }
+  .exh2-search i { color: var(--ink-faint); }
+  .exh2-search input {
+    flex: 1; min-width: 0;
+    background: transparent; border: 0; outline: 0;
+    font-family: var(--sans); font-size: 13px; color: var(--ink);
+  }
+  .exh2-search input::placeholder { color: var(--ink-faint); }
+  .exh2-search-count {
+    font-family: var(--mono); font-size: 10px; color: var(--accent);
+    white-space: nowrap; letter-spacing: 0.04em;
+  }
+
+  /* ── Floating hits dropdown — does NOT shove the content down ── */
+  .exh2-hits {
+    position: absolute;
+    top: 56px; right: 24px;
+    width: min(640px, calc(100% - 48px));
+    max-height: calc(100vh - 200px);
+    overflow-y: auto;
+    background: var(--surface);
+    border: 1px solid var(--border-2);
+    box-shadow: 0 18px 50px rgba(0,0,0,0.42);
+    border-radius: 4px;
+    z-index: 10;
+  }
+  .exh2-hits-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--chrome);
+    position: sticky; top: 0; z-index: 1;
+  }
+  .exh2-hits-head-ttl {
+    font-family: var(--mono); font-size: 10px; color: var(--ink-faint);
+    letter-spacing: 0.16em; text-transform: uppercase;
+  }
+  .exh2-hits-close {
+    background: transparent; border: 0;
+    color: var(--ink-faint); font-family: var(--mono); font-size: 10px;
+    letter-spacing: 0.12em; cursor: pointer;
+    padding: 4px 8px; border-radius: 3px;
+  }
+  .exh2-hits-close:hover { color: var(--ink); background: var(--chrome-2); }
+  .exh2-hits-list { padding: 6px 0; }
+  .exh2-hits-grp { padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  .exh2-hits-grp:last-child { border-bottom: 0; }
+  .exh2-hits-grp-head {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 6px;
+  }
+  .exh2-hits-grp-letter {
+    min-width: 36px; height: 20px; padding: 0 5px;
+    display: grid; place-items: center;
+    background: var(--accent-deep); color: var(--accent-soft);
+    font-family: var(--display); font-weight: 700; font-size: 10px;
+    border-radius: 2px;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
+  .exh2-hits-grp-ttl {
+    font-family: var(--sans); font-size: 12.5px; font-weight: 600; color: var(--ink);
+    flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .exh2-hits-grp-count {
+    font-family: var(--mono); font-size: 10px; color: var(--ink-faint);
+  }
+  .exh2-hits-row {
+    display: grid; grid-template-columns: 1fr auto;
+    gap: 12px; align-items: center;
+    padding: 6px 0;
+    cursor: pointer;
+    border-radius: 3px;
+  }
+  .exh2-hits-row:hover { background: var(--chrome-2); padding-left: 6px; padding-right: 6px; }
+  .exh2-hits-row-text {
+    font-family: var(--sans); font-size: 12px; line-height: 1.55;
+    color: var(--ink);
+  }
+  .exh2-hits-row-text .ctx { color: var(--ink-faint); }
+  .exh2-hits-row-text mark {
+    background: oklch(85% 0.16 88);
+    color: #1a1a1a;
+    padding: 0 3px; border-radius: 2px;
+    font-weight: 500;
+  }
+  .exh2-hits-row-meta {
+    display: flex; align-items: center; gap: 6px; flex-shrink: 0;
+  }
+  .exh2-hits-page {
+    font-family: var(--mono); font-size: 10px; color: var(--ink-faint);
+    background: var(--chrome-2); border: 1px solid var(--border);
+    padding: 2px 6px; border-radius: 2px;
+  }
+
+  /* ── List left, reader right ──────────────────────────────── */
+  .exh2-split {
+    display: grid;
+    grid-template-columns: 300px 1fr;
+    flex: 1;
+    min-height: 0;
+  }
+  .exh2-list-pane {
+    border-right: 1px solid var(--border);
+    background: var(--chrome);
+    display: flex; flex-direction: column;
+    min-height: 0;
+  }
+  .exh2-list-filter {
+    display: flex; align-items: center; gap: 6px;
+    padding: 10px 12px 6px;
+  }
+  .exh2-list-filter i { color: var(--ink-faint); font-size: 11px; }
+  .exh2-list-filter input {
+    flex: 1; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 3px; padding: 6px 8px;
+    font-family: var(--sans); font-size: 12px; color: var(--ink);
+  }
+  .exh2-list-filter input::placeholder { color: var(--ink-faint); }
+
+  /* Tag chips row */
+  .exh2-tagrow {
+    display: flex; flex-wrap: wrap; gap: 4px;
+    padding: 0 12px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .exh2-tag {
+    font-family: var(--mono); font-size: 9.5px;
+    letter-spacing: 0.06em; text-transform: lowercase;
+    color: var(--ink-dim);
+    background: var(--chrome-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 2px 8px;
+    cursor: pointer;
+  }
+  .exh2-tag:hover { color: var(--ink); border-color: var(--ink-faint); }
+  .exh2-tag.active { color: #fff; background: var(--accent); border-color: var(--accent); }
+  .exh2-tag-clear {
+    margin-left: auto;
+    background: transparent; border: 0; color: var(--ink-faint);
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
+    cursor: pointer; padding: 2px 4px;
+  }
+  .exh2-tag-clear:hover { color: var(--ink); }
+
+  /* Bucket sections (grouped list) */
+  .exh2-list {
+    flex: 1; overflow-y: auto; padding: 4px 0 14px;
+    display: flex; flex-direction: column;
+  }
+  .exh2-bucket {
+    display: flex; flex-direction: column;
+    margin-bottom: 6px;
+  }
+  .exh2-bucket-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 14px 6px;
+    font-family: var(--mono); font-size: 10px;
+    color: var(--ink-faint); letter-spacing: 0.14em; text-transform: uppercase;
+    cursor: pointer;
+    user-select: none;
+  }
+  .exh2-bucket-head:hover { background: var(--chrome-2); color: var(--ink-dim); }
+  .exh2-bucket-caret {
+    transition: transform 120ms ease;
+    font-size: 10px;
+  }
+  .exh2-bucket.collapsed .exh2-bucket-caret { transform: rotate(-90deg); }
+  .exh2-bucket.collapsed .exh2-bucket-body { display: none; }
+  .exh2-bucket-name { flex: 1; font-weight: 600; color: var(--ink-dim); }
+  .exh2-bucket-prefix {
+    font-family: var(--display); font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 0.04em;
+    background: var(--accent-deep);
+    padding: 1px 6px; border-radius: 2px;
+  }
+  .exh2-bucket.unbucketed .exh2-bucket-prefix { color: var(--ink-faint); background: transparent; border: 1px dashed var(--border); }
+  .exh2-bucket-count {
+    color: var(--ink-faint); font-family: var(--mono);
+  }
+  .exh2-bucket-body {
+    display: flex; flex-direction: column; gap: 1px;
+    padding: 0 6px;
+  }
+  .exh2-bucket-add {
+    display: block;
+    margin: 8px 14px 0;
+    background: transparent;
+    border: 1px dashed var(--border);
+    color: var(--ink-faint);
+    font-family: var(--mono); font-size: 10px;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 6px 10px;
+    border-radius: 3px;
+    cursor: pointer;
+    text-align: left;
+  }
+  .exh2-bucket-add:hover { color: var(--ink); border-color: var(--ink-faint); background: var(--chrome-2); }
+  .exh2-row {
+    display: grid;
+    grid-template-columns: 42px 1fr auto;
+    gap: 10px; align-items: center;
+    padding: 7px 10px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    cursor: pointer; text-align: left;
+    color: var(--ink);
+    margin: 1px 0;
+  }
+  .exh2-row:hover { background: var(--chrome-2); }
+  .exh2-row.active {
+    background: var(--chrome-2);
+    border-color: var(--accent);
+  }
+  .exh2-row-letter {
+    width: 38px; height: 24px;
+    display: grid; place-items: center;
+    font-family: var(--display); font-weight: 700; font-size: 10.5px;
+    background: transparent;
+    color: var(--ink-faint);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    padding: 0 2px;
+  }
+  .exh2-row.active .exh2-row-letter {
+    background: var(--accent); color: #fff; border-color: var(--accent);
+  }
+  .exh2-row-body { min-width: 0; }
+  .exh2-row-ttl {
+    font-family: var(--sans); font-size: 12.5px; font-weight: 500;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .exh2-row-meta {
+    display: flex; align-items: center; gap: 5px;
+    font-family: var(--mono); font-size: 9.5px;
+    color: var(--ink-faint);
+    margin-top: 2px;
+    letter-spacing: 0.04em;
+  }
+  .exh2-row-meta .dot { color: var(--ink-faint); }
+  .exh2-row-meta .status-ok { color: oklch(74% 0.13 145); }
+  .exh2-row-meta .status-warn { color: oklch(73% 0.12 70); }
+  .exh2-row-meta .status-mute { color: var(--ink-faint); }
+  .exh2-row-hits {
+    font-family: var(--mono); font-size: 10px;
+    color: var(--accent);
+    background: var(--accent-deep);
+    padding: 2px 6px; border-radius: 2px;
+    white-space: nowrap;
+  }
+
+  /* ── Reader pane (right) ──────────────────────────────────── */
+  .exh2-reader {
+    display: flex; flex-direction: column;
+    min-height: 0; min-width: 0;
+    background: var(--surface);
+    position: relative;
+  }
+  .exh2-reader-head {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 22px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+  .exh2-reader-letter {
+    min-width: 50px; height: 34px; flex-shrink: 0;
+    padding: 0 10px;
+    display: grid; place-items: center;
+    font-family: var(--display); font-weight: 700; font-size: 13.5px;
+    background: var(--accent); color: #fff;
+    border-radius: 4px;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
+  .exh2-reader-ttls { flex: 1; min-width: 0; }
+  .exh2-reader-ttl {
+    font-family: var(--display); font-size: 15px; font-weight: 700;
+    color: var(--ink);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .exh2-reader-sub {
+    display: flex; align-items: center; gap: 6px;
+    font-family: var(--mono); font-size: 10px;
+    color: var(--ink-faint);
+    margin-top: 3px;
+    letter-spacing: 0.04em;
+  }
+  .exh2-reader-sub a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+
+  /* Inline find — minimal, no second toolbar. */
+  .exh2-find {
+    display: flex; align-items: center; gap: 6px;
+    background: var(--chrome-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 8px;
+    min-width: 260px;
+  }
+  .exh2-find i { color: var(--ink-faint); font-size: 11px; }
+  .exh2-find input {
+    background: transparent; border: 0; outline: 0;
+    font-family: var(--sans); font-size: 12px; color: var(--ink);
+    width: 130px;
+  }
+  .exh2-find input::placeholder { color: var(--ink-faint); }
+  .exh2-find-count {
+    font-family: var(--mono); font-size: 10px; color: var(--accent);
+    white-space: nowrap;
+  }
+  .exh2-find-nav {
+    display: flex; gap: 2px;
+  }
+  .exh2-find-nav button {
+    background: transparent; border: 0;
+    color: var(--ink-dim);
+    padding: 2px 4px; cursor: pointer;
+    border-radius: 2px;
+  }
+  .exh2-find-nav button:hover { background: var(--chrome); color: var(--ink); }
+
+  .exh2-reader-body {
+    flex: 1; min-height: 0;
+    overflow-y: auto;
+    background: var(--chrome-2);
+    padding: 18px 0 80px;
+    display: flex; flex-direction: column; align-items: center;
+  }
+  /* Fake PDF page */
+  .pdf-page {
+    width: 720px; max-width: 92%;
+    background: #fff; color: #14130f;
+    box-shadow: 0 4px 22px rgba(0,0,0,0.30);
+    padding: 56px 72px;
+    box-sizing: border-box;
+    font-family: 'Inter', sans-serif;
+    line-height: 1.65;
+    position: relative;
+    border-radius: 1px;
+  }
+  .pdf-page h1 {
+    font-family: 'Inter', sans-serif;
+    font-weight: 700; font-size: 24px; margin: 0 0 6px;
+    letter-spacing: -0.005em;
+  }
+  .pdf-page .pdf-meta {
+    font-family: 'Courier Prime', monospace;
+    font-size: 10px; color: #6b675c;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    margin-bottom: 28px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #d9d2bf;
+  }
+  .pdf-page p {
+    font-size: 14px; color: #1a1814;
+    margin: 0 0 14px;
+  }
+  .pdf-page mark.pdf-sel {
+    background: oklch(80% 0.18 75 / 0.55);
+    color: inherit;
+    padding: 0 1px;
+    box-shadow: 0 0 0 3px oklch(80% 0.18 75 / 0.2);
+  }
+  .pdf-page mark.pdf-hit {
+    background: oklch(88% 0.16 88 / 0.55);
+    color: inherit;
+    padding: 0 1px;
+  }
+  .pdf-pagelbl {
+    position: absolute;
+    top: 18px; right: 22px;
+    font-family: 'Courier Prime', monospace; font-size: 10px;
+    color: #8a8472; letter-spacing: 0.1em;
+  }
+
+  /* ── Capture bar (sticky, attached to reader) ─────────────── */
+  .exh2-cap {
+    position: sticky; bottom: 0;
+    background: var(--surface);
+    border-top: 2px solid var(--accent);
+    box-shadow: 0 -14px 36px rgba(0,0,0,0.22);
+    padding: 12px 22px 14px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    column-gap: 20px;
+    row-gap: 8px;
+    align-items: end;
+    z-index: 5;
+  }
+  .exh2-cap-quote {
+    font-family: 'Inter', sans-serif;
+    font-size: 13.5px; line-height: 1.55;
+    color: var(--ink);
+    grid-column: 1 / 2;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .exh2-cap-quote .ctx { color: var(--ink-faint); }
+  .exh2-cap-quote mark {
+    background: oklch(88% 0.16 88);
+    color: #1a1a1a;
+    padding: 0 3px; border-radius: 2px;
+    font-style: normal;
+  }
+  .exh2-cap-meta {
+    grid-column: 1 / 2;
+    display: flex; align-items: center; gap: 10px;
+    font-family: var(--mono); font-size: 10px;
+    color: var(--ink-faint); letter-spacing: 0.06em;
+  }
+  .exh2-cap-letter {
+    display: inline-grid; place-items: center;
+    min-width: 38px; height: 18px; padding: 0 5px;
+    background: var(--accent); color: #fff;
+    font-family: var(--display); font-weight: 700; font-size: 10px;
+    border-radius: 2px;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
+  .exh2-cap-page {
+    background: var(--chrome-2); color: var(--ink-dim);
+    padding: 2px 6px; border-radius: 2px;
+    border: 1px solid var(--border);
+    font-family: var(--mono);
+  }
+  .exh2-cap-srctitle {
+    color: var(--ink-dim);
+    font-family: var(--sans); letter-spacing: 0; text-transform: none;
+  }
+  .exh2-cap-len { color: var(--ink-faint); margin-left: auto; }
+  .exh2-cap-actions {
+    grid-column: 2 / 3; grid-row: 1 / 3;
+    display: flex; flex-direction: column; gap: 6px;
+    align-items: stretch;
+  }
+  .exh2-cap-actions-row { display: flex; gap: 6px; }
+  .exh2-cap-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--mono); font-size: 11px;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 8px 14px;
+    background: var(--chrome-2);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--ink); cursor: pointer;
+    justify-content: center;
+  }
+  .exh2-cap-btn:hover { background: var(--chrome); border-color: var(--ink-faint); }
+  .exh2-cap-btn.primary {
+    background: var(--accent); color: #fff; border-color: var(--accent);
+  }
+  .exh2-cap-btn.primary:hover { background: var(--accent-deep); border-color: var(--accent-deep); }
+  .exh2-cap-btn.ghost {
+    background: transparent; border-color: transparent;
+    color: var(--ink-faint);
+  }
+  .exh2-cap-btn.ghost:hover { color: var(--ink); background: var(--chrome); border-color: var(--border); }
+
+  /* Status pill colors */
+  .stat { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; }
+
+  /* ── Sidebar cited-text section ───────────────────────────── */
+  .ws-cited-row {
+    display: grid;
+    grid-template-columns: 36px 1fr auto;
+    gap: 8px;
+    align-items: center;
+    padding: 5px 14px;
+    cursor: pointer;
+    border-left: 2px solid transparent;
+  }
+  .ws-cited-row:hover { background: var(--chrome-2); border-left-color: var(--border-2); }
+  .ws-cited-letter {
+    min-width: 32px; height: 18px; padding: 0 4px;
+    display: grid; place-items: center;
+    font-family: var(--display); font-weight: 700; font-size: 9.5px;
+    background: var(--accent-deep); color: var(--accent-soft);
+    border-radius: 2px;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
+  .ws-cited-quote {
+    font-family: 'Inter', sans-serif;
+    font-size: 12px; color: var(--ink-dim);
+    font-style: italic;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .ws-cited-meta {
+    font-family: var(--mono); font-size: 9px; color: var(--ink-faint);
+    white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<div class="mock-bar">
+  <span class="mock-dot"></span>
+  <span>Static mockup · Exhibits tab (revised)</span>
+  <a href="#" id="toggle-search">show workspace-wide search results</a>
+</div>
+
+<div class="titlebar-mock">
+  <span class="brand"><span class="brand-mark"></span>DraftEO</span>
+  <span>Workspaces</span><span class="crumb-sep">/</span><span class="crumb-here">Metro audit matter</span>
+  <span class="right">
+    <span class="status"><span class="dot"></span>E2EE · CONNECTED</span>
+    <span class="user"><span class="av">JD</span> jdoe</span>
+  </span>
+</div>
+
+<div class="mock-shell">
+  <aside class="mock-side">
+    <div class="ws-header">
+      <div class="ws-name">Metro audit matter</div>
+      <div class="ws-desc">7 DRAFTS · 12 EXHIBITS · 3 MEMBERS</div>
+    </div>
+    <nav class="ws-nav">
+      <button class="active"><i class="ph ph-files"></i><span>Exhibits</span><span class="kbd">⌘K</span></button>
+      <button><i class="ph ph-link-simple"></i><span>Sources</span><span class="kbd">12</span></button>
+      <button><i class="ph ph-squares-four"></i><span>Corkboard</span><span class="kbd">4</span></button>
+    </nav>
+
+    <div class="ws-section">
+      <div class="ws-section-head">
+        <span>DRAFTS<span class="ws-section-count">7</span></span>
+        <button title="New draft"><i class="ph ph-plus"></i></button>
+      </div>
+      <div class="draft-row active">
+        <i class="ph ph-file-text"></i>
+        <span class="name">Findings memo</span>
+        <span class="ver">v3</span>
+      </div>
+      <div class="draft-row">
+        <i class="ph ph-file"></i>
+        <span class="name">Procurement timeline</span>
+        <span class="ver">v1</span>
+      </div>
+      <div class="draft-row">
+        <i class="ph ph-file"></i>
+        <span class="name">OHS rebuttal</span>
+        <span class="ver">v0</span>
+      </div>
+      <div class="draft-row">
+        <i class="ph ph-file"></i>
+        <span class="name">Auditor response draft</span>
+        <span class="ver">v0</span>
+      </div>
+    </div>
+
+    <div class="ws-section">
+      <div class="ws-section-head">
+        <span>CITED TEXT<span class="ws-section-count">4</span></span>
+      </div>
+      <div class="ws-cited-row">
+        <span class="ws-cited-letter">PX-A</span>
+        <span class="ws-cited-quote">"Beginning July 1, 2017…"</span>
+        <span class="ws-cited-meta">p.12</span>
+      </div>
+      <div class="ws-cited-row">
+        <span class="ws-cited-letter">PX-A</span>
+        <span class="ws-cited-quote">"failure to maintain…"</span>
+        <span class="ws-cited-meta">p.18</span>
+      </div>
+      <div class="ws-cited-row">
+        <span class="ws-cited-letter">PX-B</span>
+        <span class="ws-cited-quote">"OHS §4.2.1 — confined-space entry"</span>
+        <span class="ws-cited-meta">p.47</span>
+      </div>
+      <div class="ws-cited-row">
+        <span class="ws-cited-letter">WS-A</span>
+        <span class="ws-cited-quote">"motion carried unanimously…"</span>
+        <span class="ws-cited-meta"></span>
+      </div>
+    </div>
+  </aside>
+
+  <main class="mock-main">
+    <div class="mock-tabs">
+      <div class="mock-tab"><i class="ph ph-file-text"></i> Findings memo</div>
+      <div class="mock-tab active"><i class="ph ph-files"></i> Exhibits</div>
+      <div class="mock-tab"><i class="ph ph-link-simple"></i> Sources</div>
+    </div>
+
+    <section class="exh2">
+      <!-- One-row toolbar: title + count on the left, search wide on the right -->
+      <div class="exh2-bar">
+        <div class="exh2-ttl-grp">
+          <div class="exh2-ttl">Exhibits</div>
+          <div class="exh2-ttl-sub">12 IN WORKSPACE</div>
+        </div>
+        <div class="exh2-ttl-help">Click an exhibit to read · highlight a passage to cite · search to find a phrase across all of them.</div>
+        <div class="exh2-search">
+          <i class="ph ph-magnifying-glass"></i>
+          <input id="ws-search-inp" placeholder="Search across every exhibit…" value="metro audit" />
+          <span class="exh2-search-count" id="ws-search-count">7 hits · 3 exhibits</span>
+        </div>
+      </div>
+
+      <!-- Floating dropdown (does NOT shove the content down) -->
+      <div class="exh2-hits" id="ws-hits">
+        <div class="exh2-hits-head">
+          <span class="exh2-hits-head-ttl">7 hits across 3 exhibits</span>
+          <button class="exh2-hits-close" onclick="document.getElementById('ws-hits').style.display='none'">✕ clear</button>
+        </div>
+        <div class="exh2-hits-list">
+          <div class="exh2-hits-grp">
+            <div class="exh2-hits-grp-head">
+              <span class="exh2-hits-grp-letter">PX-A</span>
+              <span class="exh2-hits-grp-ttl">Audit report — metro division</span>
+              <span class="exh2-hits-grp-count">4 hits</span>
+            </div>
+            <div class="exh2-hits-row">
+              <div class="exh2-hits-row-text">
+                <span class="ctx">…the </span><mark>metro audit</mark><span class="ctx"> findings of November 2016 identified seven distinct gaps in documentation…</span>
+              </div>
+              <div class="exh2-hits-row-meta">
+                <span class="exh2-hits-page">p. 3</span>
+              </div>
+            </div>
+            <div class="exh2-hits-row">
+              <div class="exh2-hits-row-text">
+                <span class="ctx">…subsequent </span><mark>metro audit</mark><span class="ctx"> revealed that compliance fell short of the 2017 standard…</span>
+              </div>
+              <div class="exh2-hits-row-meta">
+                <span class="exh2-hits-page">p. 8</span>
+              </div>
+            </div>
+          </div>
+          <div class="exh2-hits-grp">
+            <div class="exh2-hits-grp-head">
+              <span class="exh2-hits-grp-letter">PX-D</span>
+              <span class="exh2-hits-grp-ttl">Local news coverage</span>
+              <span class="exh2-hits-grp-count">2 hits</span>
+            </div>
+            <div class="exh2-hits-row">
+              <div class="exh2-hits-row-text">
+                <span class="ctx">…the </span><mark>metro audit</mark><span class="ctx"> report, released after a six-month delay, drew sharp criticism from union…</span>
+              </div>
+              <div class="exh2-hits-row-meta"></div>
+            </div>
+          </div>
+          <div class="exh2-hits-grp">
+            <div class="exh2-hits-grp-head">
+              <span class="exh2-hits-grp-letter">DX-A</span>
+              <span class="exh2-hits-grp-ttl">Internal memo on July changes</span>
+              <span class="exh2-hits-grp-count">1 hit</span>
+            </div>
+            <div class="exh2-hits-row">
+              <div class="exh2-hits-row-text">
+                <span class="ctx">…response to the </span><mark>metro audit</mark><span class="ctx">, the department will implement a triple-signoff for contractor onboarding…</span>
+              </div>
+              <div class="exh2-hits-row-meta"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- List left, reader right -->
+      <div class="exh2-split">
+        <div class="exh2-list-pane">
+          <div class="exh2-list-filter">
+            <i class="ph ph-funnel"></i>
+            <input placeholder="Filter exhibits…" />
+          </div>
+          <div class="exh2-tagrow">
+            <button class="exh2-tag">compliance</button>
+            <button class="exh2-tag active">audit</button>
+            <button class="exh2-tag">contracts</button>
+            <button class="exh2-tag">witness</button>
+            <button class="exh2-tag-clear">clear</button>
+          </div>
+          <div class="exh2-list">
+            <!-- Bucket: PLAINTIFF (PX) -->
+            <div class="exh2-bucket">
+              <div class="exh2-bucket-head">
+                <span class="exh2-bucket-caret">▾</span>
+                <span class="exh2-bucket-prefix">PX</span>
+                <span class="exh2-bucket-name">Plaintiff</span>
+                <span class="exh2-bucket-count">4</span>
+              </div>
+              <div class="exh2-bucket-body">
+                <div class="exh2-row active">
+                  <div class="exh2-row-letter">PX-A</div>
+                  <div class="exh2-row-body">
+                    <div class="exh2-row-ttl">Audit report — metro division</div>
+                    <div class="exh2-row-meta">
+                      <span class="status-ok">archived</span>
+                      <span class="dot">·</span>
+                      <span>PDF</span>
+                    </div>
+                  </div>
+                  <div class="exh2-row-hits">4</div>
+                </div>
+                <div class="exh2-row">
+                  <div class="exh2-row-letter">PX-B</div>
+                  <div class="exh2-row-body">
+                    <div class="exh2-row-ttl">OHS standards manual 2024</div>
+                    <div class="exh2-row-meta">
+                      <span class="status-ok">archived</span>
+                      <span class="dot">·</span>
+                      <span>PDF</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="exh2-row">
+                  <div class="exh2-row-letter">PX-C</div>
+                  <div class="exh2-row-body">
+                    <div class="exh2-row-ttl">Procurement RFQ — boilers</div>
+                    <div class="exh2-row-meta">
+                      <span class="status-ok">archived</span>
+                      <span class="dot">·</span>
+                      <span>PDF</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="exh2-row">
+                  <div class="exh2-row-letter">PX-D</div>
+                  <div class="exh2-row-body">
+                    <div class="exh2-row-ttl">Local news coverage</div>
+                    <div class="exh2-row-meta">
+                      <span class="status-warn">web</span>
+                      <span class="dot">·</span>
+                      <span>HTML</span>
+                    </div>
+                  </div>
+                  <div class="exh2-row-hits">2</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Bucket: DEFENDANT (DX) -->
+            <div class="exh2-bucket">
+              <div class="exh2-bucket-head">
+                <span class="exh2-bucket-caret">▾</span>
+                <span class="exh2-bucket-prefix">DX</span>
+                <span class="exh2-bucket-name">Defendant</span>
+                <span class="exh2-bucket-count">3</span>
+              </div>
+              <div class="exh2-bucket-body">
+                <div class="exh2-row">
+                  <div class="exh2-row-letter">DX-A</div>
+                  <div class="exh2-row-body">
+                    <div class="exh2-row-ttl">Internal memo on July changes</div>
+                    <div class="exh2-row-meta">
+                      <span class="status-mute">local</span>
+                      <span class="dot">·</span>
+                      <span>PDF</span>
+                    </div>
+                  </div>
+                  <div class="exh2-row-hits">1</div>
+                </div>
+                <div class="exh2-row">
+                  <div class="exh2-row-letter">DX-B</div>
+                  <div class="exh2-row-body">
+                    <div class="exh2-row-ttl">Spreadsheet — vendor list</div>
+                    <div class="exh2-row-meta">
+                      <span class="status-mute">local</span>
+                      <span class="dot">·</span>
+                      <span>CSV</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="exh2-row">
+                  <div class="exh2-row-letter">DX-C</div>
+                  <div class="exh2-row-body">
+                    <div class="exh2-row-ttl">Contractor agreement</div>
+                    <div class="exh2-row-meta">
+                      <span class="status-ok">archived</span>
+                      <span class="dot">·</span>
+                      <span>PDF</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Bucket: WITNESS STATEMENTS (no prefix — uses bucket name as label) -->
+            <div class="exh2-bucket">
+              <div class="exh2-bucket-head">
+                <span class="exh2-bucket-caret">▾</span>
+                <span class="exh2-bucket-prefix">WS</span>
+                <span class="exh2-bucket-name">Witness statements</span>
+                <span class="exh2-bucket-count">2</span>
+              </div>
+              <div class="exh2-bucket-body">
+                <div class="exh2-row">
+                  <div class="exh2-row-letter">WS-A</div>
+                  <div class="exh2-row-body">
+                    <div class="exh2-row-ttl">Council meeting minutes</div>
+                    <div class="exh2-row-meta">
+                      <span class="status-ok">archived</span>
+                      <span class="dot">·</span>
+                      <span>PDF</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="exh2-row">
+                  <div class="exh2-row-letter">WS-B</div>
+                  <div class="exh2-row-body">
+                    <div class="exh2-row-ttl">Deposition transcript — Reyes</div>
+                    <div class="exh2-row-meta">
+                      <span class="status-ok">archived</span>
+                      <span class="dot">·</span>
+                      <span>PDF</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Unbucketed (loose) -->
+            <div class="exh2-bucket unbucketed">
+              <div class="exh2-bucket-head">
+                <span class="exh2-bucket-caret">▾</span>
+                <span class="exh2-bucket-prefix">—</span>
+                <span class="exh2-bucket-name">No bucket</span>
+                <span class="exh2-bucket-count">3</span>
+              </div>
+              <div class="exh2-bucket-body">
+                <div class="exh2-row">
+                  <div class="exh2-row-letter">A</div>
+                  <div class="exh2-row-body">
+                    <div class="exh2-row-ttl">Pre-trial scheduling order</div>
+                    <div class="exh2-row-meta">
+                      <span class="status-ok">archived</span>
+                      <span class="dot">·</span>
+                      <span>PDF</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="exh2-row">
+                  <div class="exh2-row-letter">B</div>
+                  <div class="exh2-row-body">
+                    <div class="exh2-row-ttl">Email — counsel re: discovery</div>
+                    <div class="exh2-row-meta">
+                      <span class="status-mute">local</span>
+                      <span class="dot">·</span>
+                      <span>EML</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="exh2-row">
+                  <div class="exh2-row-letter">C</div>
+                  <div class="exh2-row-body">
+                    <div class="exh2-row-ttl">Press release — June 2017</div>
+                    <div class="exh2-row-meta">
+                      <span class="status-warn">web</span>
+                      <span class="dot">·</span>
+                      <span>HTML</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <button class="exh2-bucket-add">+ New bucket</button>
+          </div>
+        </div>
+
+        <div class="exh2-reader">
+          <div class="exh2-reader-head">
+            <div class="exh2-reader-letter">PX-A</div>
+            <div class="exh2-reader-ttls">
+              <div class="exh2-reader-ttl">Audit report — metro division</div>
+              <div class="exh2-reader-sub">
+                <span>PDF</span>
+                <span>·</span>
+                <span>2.4 MB</span>
+                <span>·</span>
+                <span>24 pages</span>
+                <span>·</span>
+                <a href="#" onclick="return false">archive.org</a>
+              </div>
+            </div>
+            <div class="exh2-find">
+              <i class="ph ph-magnifying-glass"></i>
+              <input placeholder="Find in exhibit…" value="metro audit" />
+              <span class="exh2-find-count">1 / 4</span>
+              <div class="exh2-find-nav">
+                <button><i class="ph ph-caret-up"></i></button>
+                <button><i class="ph ph-caret-down"></i></button>
+              </div>
+            </div>
+          </div>
+
+          <div class="exh2-reader-body">
+            <div class="pdf-page">
+              <div class="pdf-pagelbl">p. 3 of 24</div>
+              <h1>Findings — Metro Division Compliance Audit</h1>
+              <div class="pdf-meta">November 2016 · Office of the Auditor General · INTERNAL DRAFT</div>
+              <p>The <mark class="pdf-sel">metro audit findings of November 2016 identified seven distinct gaps in documentation</mark> across the procurement, occupational health, and contractor-onboarding processes maintained by the Metro Division.</p>
+              <p>Across the sample period (June 2015 – October 2016), the division processed 412 contractor engagements. Of these, 38% lacked a signed safety acknowledgment prior to site mobilisation, and 22% lacked the secondary signoff required under §4.2.1 of the prevailing OHS standards manual.</p>
+              <p>Beginning July 1, 2017, all metro contractors will be required to complete the new triple-signoff process described in Appendix C of this report. The transition period for legacy engagements ends December 31, 2017.</p>
+              <p>The audit team further notes a pattern of failure to maintain documentation supporting subsequent confined-space entries, which under the standards manual triggers an automatic suspension of the relevant work authorisation. Eleven such suspensions ought to have been issued during the audit window; none were.</p>
+              <p>Recommendations are summarised in Section 4 of this report, with implementation timelines contingent on procurement and contracting workflow changes detailed in the accompanying procurement RFQ exhibit.</p>
+            </div>
+          </div>
+
+          <div class="exh2-cap">
+            <div class="exh2-cap-quote">
+              <span class="ctx">…The </span><mark>metro audit findings of November 2016 identified seven distinct gaps in documentation</mark><span class="ctx"> across the procurement, occupational health, and contractor-onboarding processes…</span>
+            </div>
+            <div class="exh2-cap-meta">
+              <span class="exh2-cap-letter">PX-A</span>
+              <span class="exh2-cap-srctitle">Audit report — metro division</span>
+              <span class="exh2-cap-page">p. 3</span>
+              <span class="exh2-cap-len">112 chars</span>
+            </div>
+            <div class="exh2-cap-actions">
+              <div class="exh2-cap-actions-row">
+                <button class="exh2-cap-btn primary"><i class="ph ph-scissors"></i> Save</button>
+                <button class="exh2-cap-btn"><i class="ph ph-arrow-bend-up-right"></i> Stage</button>
+              </div>
+              <div class="exh2-cap-actions-row">
+                <button class="exh2-cap-btn ghost"><i class="ph ph-copy"></i> Copy quote</button>
+                <button class="exh2-cap-btn ghost" title="Dismiss"><i class="ph ph-x"></i> Dismiss</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+  // Show / hide the floating workspace-hits dropdown so reviewers can
+  // see both states without typing into the input.
+  const toggle = document.getElementById('toggle-search');
+  const hits = document.getElementById('ws-hits');
+  const cnt = document.getElementById('ws-search-count');
+  const wsInp = document.getElementById('ws-search-inp');
+  // Start with hits hidden so the PDF is the hero on first paint.
+  hits.style.display = 'none';
+  cnt.textContent = '';
+  wsInp.value = '';
+  toggle.textContent = 'show workspace-wide search results';
+  function setShown(shown) {
+    hits.style.display = shown ? '' : 'none';
+    toggle.textContent = shown ? 'hide workspace-wide search results' : 'show workspace-wide search results';
+    cnt.textContent = shown ? '7 hits · 3 exhibits' : '';
+    wsInp.value = shown ? 'metro audit' : '';
+  }
+  toggle.addEventListener('click', (e) => {
+    e.preventDefault();
+    setShown(hits.style.display === 'none');
+  });
+
+  // Collapsible bucket headers
+  document.querySelectorAll('.exh2-bucket-head').forEach(head => {
+    head.addEventListener('click', () => {
+      head.parentElement.classList.toggle('collapsed');
+    });
+  });
+
+  // Tag chip toggle (mock — single-select active state for now)
+  document.querySelectorAll('.exh2-tag').forEach(t => {
+    t.addEventListener('click', () => {
+      const wasActive = t.classList.contains('active');
+      document.querySelectorAll('.exh2-tag').forEach(x => x.classList.remove('active'));
+      if (!wasActive) t.classList.add('active');
+    });
+  });
+</script>
+</body>
+</html>

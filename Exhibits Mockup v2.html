@@ -1,0 +1,596 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DraftEO — Exhibits (mockup)</title>
+<link href="https://fonts.googleapis.com/css2?family=Courier+Prime:ital,wght@0,400;0,700;1,400&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css" />
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css" />
+<link rel="stylesheet" href="styles.css" />
+<link rel="stylesheet" href="theme.css" />
+<link rel="stylesheet" href="exhibits.css" />
+<style>
+  /* Mockup-only chrome so the full Exhibits tab fills the viewport */
+  html, body { height: 100%; margin: 0; }
+  body { display: flex; flex-direction: column; background: var(--surface); color: var(--ink); }
+  .mock-bar {
+    flex-shrink: 0;
+    padding: 8px 18px;
+    border-bottom: 1px solid var(--border);
+    background: var(--chrome);
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-faint);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .mock-bar .mock-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+  .mock-bar a {
+    margin-left: auto;
+    color: var(--ink-faint);
+    text-decoration: none;
+    text-transform: none;
+    letter-spacing: 0;
+    font-family: var(--sans);
+    font-size: 11px;
+  }
+  .mock-bar a:hover { color: var(--ink); }
+  .mock-shell {
+    display: grid;
+    grid-template-columns: 248px 1fr;
+    flex: 1;
+    min-height: 0;
+  }
+  .mock-side {
+    border-right: 1px solid var(--border);
+    background: var(--chrome);
+    overflow-y: auto;
+    padding: 14px 0;
+    font-family: var(--sans);
+    font-size: 12px;
+  }
+  .mock-side .ws-section { margin-top: 14px; }
+  .mock-side .ws-section-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 4px 14px 6px;
+    font-family: var(--mono); font-size: 10px;
+    color: var(--ink-faint); letter-spacing: 0.18em; text-transform: uppercase;
+  }
+  .mock-side .ws-section-head .iconbtn-row { display: flex; gap: 4px; }
+  .mock-side .ws-section-head button {
+    background: transparent; border: 0; color: var(--ink-faint);
+    width: 22px; height: 22px; display: grid; place-items: center;
+    cursor: pointer; border-radius: 3px;
+  }
+  .mock-side .ws-section-head button:hover { color: var(--ink); background: var(--chrome-2); }
+  .mock-side .ws-search {
+    display: flex; align-items: center; gap: 8px;
+    background: transparent; border: 0; border-top: 1px solid var(--border);
+    width: 100%; text-align: left; padding: 10px 14px;
+    color: var(--ink); cursor: pointer; font-family: var(--sans);
+    font-size: 13px;
+  }
+  .mock-side .ws-search:first-of-type { border-top: 0; }
+  .mock-side .ws-search:hover { background: var(--chrome-2); }
+  .mock-side .ws-search i { color: var(--accent); }
+  .mock-side .ws-search .kbd {
+    margin-left: auto;
+    font-family: var(--mono); font-size: 10px;
+    color: var(--ink-faint); letter-spacing: 0.06em;
+    padding: 2px 6px; border: 1px solid var(--border); border-radius: 3px;
+  }
+  .mock-side .ws-header {
+    padding: 10px 14px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .mock-side .ws-eyebrow {
+    font-family: var(--mono); font-size: 9px; color: var(--ink-faint);
+    letter-spacing: 0.2em; text-transform: uppercase; margin-bottom: 4px;
+  }
+  .mock-side .ws-name {
+    font-family: var(--display); font-size: 18px; font-weight: 700; color: var(--ink);
+    letter-spacing: -0.01em;
+  }
+  .mock-side .ws-desc {
+    font-family: var(--sans); font-size: 11px; color: var(--ink-faint); margin-top: 4px;
+  }
+  .ws-tree-empty {
+    padding: 12px 14px;
+    color: var(--ink-faint);
+    font-family: var(--sans);
+    font-size: 11.5px;
+    font-style: italic;
+  }
+  .mock-tabs {
+    display: flex; align-items: stretch;
+    background: var(--chrome); border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .mock-tab {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 14px;
+    border-right: 1px solid var(--border);
+    font-family: var(--sans); font-size: 12.5px;
+    color: var(--ink-dim);
+    cursor: pointer;
+  }
+  .mock-tab.active { background: var(--surface); color: var(--ink); border-bottom: 2px solid var(--accent); padding-bottom: 7px; }
+  .mock-tab i { color: var(--ink-faint); }
+  .mock-tab.active i { color: var(--accent); }
+  .mock-main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .mock-content { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  /* Fake PDF page background pattern */
+  .pdf-fake {
+    width: 720px; height: 920px;
+    background: #fff;
+    box-shadow: 0 4px 22px rgba(0,0,0,0.22);
+    position: relative;
+    color: #14130f;
+    padding: 64px 78px;
+    box-sizing: border-box;
+    font-family: 'Inter', sans-serif;
+    line-height: 1.6;
+  }
+  .pdf-fake h1 {
+    font-family: 'Inter', sans-serif;
+    font-weight: 700;
+    font-size: 22px;
+    margin: 0 0 6px;
+    letter-spacing: -0.005em;
+  }
+  .pdf-fake .pdf-meta {
+    font-family: 'Courier Prime', monospace;
+    font-size: 10px;
+    color: #6b675c;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 30px;
+    border-bottom: 1px solid #d9d2bf;
+    padding-bottom: 10px;
+  }
+  .pdf-fake p {
+    font-size: 13.5px;
+    color: #1a1814;
+    margin: 0 0 14px;
+  }
+  .pdf-fake .pdf-num {
+    position: absolute; top: 24px; right: 32px;
+    font-family: 'Courier Prime', monospace; font-size: 10px;
+    color: #6b675c; letter-spacing: 0.08em;
+  }
+  .pdf-fake .pdf-page-foot {
+    position: absolute; bottom: 32px; left: 50%; transform: translateX(-50%);
+    font-family: 'Courier Prime', monospace; font-size: 10px;
+    color: #8a8472;
+  }
+  .pdf-fake mark.pdf-sel {
+    background: oklch(80% 0.18 75 / 0.55);
+    color: inherit;
+    padding: 0 1px;
+    box-shadow: 0 0 0 3px oklch(80% 0.18 75 / 0.25);
+  }
+  /* Hosted shell mimic */
+  .titlebar-mock {
+    height: 38px;
+    background: var(--chrome);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 14px; padding: 0 18px;
+    font-family: var(--sans); font-size: 12px;
+    color: var(--ink-dim);
+    flex-shrink: 0;
+  }
+  .titlebar-mock .brand { font-family: var(--display); font-weight: 700; font-size: 13px; color: var(--ink); }
+  .titlebar-mock .brand-mark {
+    width: 12px; height: 12px; display: inline-block; vertical-align: -2px;
+    background: var(--accent); transform: rotate(45deg); margin-right: 8px;
+  }
+  .titlebar-mock .crumb-sep { color: var(--ink-faint); margin: 0 4px; }
+  .titlebar-mock .crumb-here { color: var(--ink); }
+  .titlebar-mock .right { margin-left: auto; display: flex; align-items: center; gap: 12px; font-size: 11px; }
+  .titlebar-mock .status {
+    display: inline-flex; align-items: center; gap: 6px;
+    color: var(--ok);
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+  }
+  .titlebar-mock .status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+  .titlebar-mock .user {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--mono); font-size: 10px;
+  }
+  .titlebar-mock .user .av {
+    width: 18px; height: 18px;
+    display: grid; place-items: center;
+    background: var(--accent-deep); color: var(--accent-soft);
+    font-weight: 700;
+  }
+</style>
+</head>
+<body>
+<div class="mock-bar">
+  <span class="mock-dot"></span>
+  <span>Static mockup · Exhibits tab</span>
+  <a href="#" id="toggle-search">show workspace-wide search results</a>
+</div>
+
+<div class="titlebar-mock">
+  <span class="brand"><span class="brand-mark"></span>DraftEO</span>
+  <span>Workspaces</span><span class="crumb-sep">/</span><span class="crumb-here">Metro audit matter</span>
+  <span class="right">
+    <span class="status"><span class="dot"></span>E2EE · CONNECTED</span>
+    <span class="user"><span class="av">JD</span> jdoe</span>
+  </span>
+</div>
+
+<div class="mock-shell">
+  <aside class="mock-side">
+    <div class="ws-header">
+      <div class="ws-eyebrow"><i class="ph ph-folder-open"></i> WORKSPACE</div>
+      <div class="ws-name">Metro audit matter</div>
+      <div class="ws-desc">7 drafts · 12 exhibits · 3 members</div>
+    </div>
+    <button class="ws-search"><i class="ph ph-files"></i><span>Exhibits</span><span class="kbd">⌘K</span></button>
+    <button class="ws-search"><i class="ph ph-link-simple"></i><span>Sources</span><span class="kbd">12</span></button>
+    <button class="ws-search"><i class="ph ph-squares-four"></i><span>Corkboard</span><span class="kbd">4</span></button>
+
+    <div class="ws-section">
+      <div class="ws-section-head">
+        <span><i class="ph ph-files"></i> DRAFTS <span class="ws-section-count">7</span></span>
+        <div class="iconbtn-row"><button><i class="ph ph-plus"></i></button></div>
+      </div>
+      <div style="padding: 0 8px; display:flex; flex-direction:column; gap:2px;">
+        <div style="display:grid; grid-template-columns:auto 1fr auto; gap:8px; padding:6px 10px; font-family:var(--sans); font-size:12.5px; color:var(--ink); background:var(--chrome-2); border:1px solid var(--accent); border-radius:3px;">
+          <i class="ph ph-file-text" style="color:var(--accent)"></i>
+          <span>Findings memo</span>
+          <span style="color:var(--ink-faint); font-family:var(--mono); font-size:10px;">v3</span>
+        </div>
+        <div style="display:grid; grid-template-columns:auto 1fr auto; gap:8px; padding:6px 10px; font-family:var(--sans); font-size:12.5px; color:var(--ink-dim);">
+          <i class="ph ph-file" style="color:var(--ink-faint)"></i>
+          <span>Procurement timeline</span>
+          <span style="color:var(--ink-faint); font-family:var(--mono); font-size:10px;">v1</span>
+        </div>
+        <div style="display:grid; grid-template-columns:auto 1fr auto; gap:8px; padding:6px 10px; font-family:var(--sans); font-size:12.5px; color:var(--ink-dim);">
+          <i class="ph ph-file" style="color:var(--ink-faint)"></i>
+          <span>OHS rebuttal</span>
+          <span style="color:var(--ink-faint); font-family:var(--mono); font-size:10px;">v0</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="ws-section">
+      <div class="ws-section-head">
+        <span><i class="ph ph-files"></i> EXHIBITS <span class="ws-section-count">12</span></span>
+        <div class="iconbtn-row">
+          <button title="Open Exhibits tab"><i class="ph ph-arrows-out-simple"></i></button>
+          <button title="Add"><i class="ph ph-plus"></i></button>
+        </div>
+      </div>
+      <div class="ws-exh-preview" style="padding-top:4px;">
+        <button class="ws-exh-row"><span class="ws-exh-letter">A</span><span class="ws-exh-name">Audit report — metro division</span></button>
+        <button class="ws-exh-row"><span class="ws-exh-letter">B</span><span class="ws-exh-name">OHS standards manual 2024</span></button>
+        <button class="ws-exh-row"><span class="ws-exh-letter">C</span><span class="ws-exh-name">Procurement RFQ — boilers</span></button>
+        <button class="ws-exh-row"><span class="ws-exh-letter warn">D</span><span class="ws-exh-name">Local news coverage</span></button>
+        <button class="ws-exh-row"><span class="ws-exh-letter">E</span><span class="ws-exh-name">Council meeting minutes</span></button>
+        <button class="ws-exh-row"><span class="ws-exh-letter">F</span><span class="ws-exh-name">Internal memo on July changes</span></button>
+        <button class="ws-exh-row"><span class="ws-exh-letter mute">G</span><span class="ws-exh-name">Spreadsheet — vendor list</span></button>
+        <button class="ws-exh-row"><span class="ws-exh-letter">H</span><span class="ws-exh-name">Contractor agreement</span></button>
+        <button class="ws-exh-more">+ 4 more — open Exhibits</button>
+      </div>
+    </div>
+
+    <div class="ws-section">
+      <div class="ws-section-head">
+        <span><i class="ph ph-scissors"></i> CITED TEXT <span class="ws-section-count">4</span></span>
+      </div>
+      <div style="padding: 2px 8px 8px;">
+        <div class="ws-cited-row">
+          <span class="ws-cited-letter">A</span>
+          <span class="ws-cited-quote">"Beginning July 1, 2017, all metro contractors…"</span>
+          <span class="ws-cited-meta">· p. 12</span>
+        </div>
+        <div class="ws-cited-row">
+          <span class="ws-cited-letter">A</span>
+          <span class="ws-cited-quote">"failure to maintain documentation triggered…"</span>
+          <span class="ws-cited-meta">· p. 18</span>
+        </div>
+        <div class="ws-cited-row">
+          <span class="ws-cited-letter">B</span>
+          <span class="ws-cited-quote">"OHS §4.2.1 — confined-space entry"</span>
+          <span class="ws-cited-meta">· p. 47</span>
+        </div>
+        <div class="ws-cited-row">
+          <span class="ws-cited-letter">E</span>
+          <span class="ws-cited-quote">"motion carried unanimously…"</span>
+          <span class="ws-cited-meta"></span>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <main class="mock-main">
+    <div class="mock-tabs">
+      <div class="mock-tab"><i class="ph ph-file-text"></i> Findings memo</div>
+      <div class="mock-tab active"><i class="ph ph-files"></i> Exhibits</div>
+      <div class="mock-tab"><i class="ph ph-link-simple"></i> Sources</div>
+    </div>
+
+    <section class="exh">
+      <div class="exh-head">
+        <div class="exh-head-ttls">
+          <div class="exh-head-eyebrow">WORKSPACE</div>
+          <div class="exh-head-ttl">Exhibits</div>
+          <div class="exh-head-sub">
+            Every document ingested into this workspace. Click an exhibit to read it,
+            highlight a passage to cite it. Search the bar to the right to find a
+            phrase across <b>every</b> exhibit at once.
+          </div>
+        </div>
+        <div class="exh-head-search">
+          <i class="ph ph-magnifying-glass" style="font-size:14px;"></i>
+          <input class="exh-wssearch-inp" placeholder="Search across every exhibit in this workspace…" id="ws-search-inp" value="metro audit" />
+          <span class="exh-wssearch-status" id="ws-search-status">7 hits in 3 exhibits</span>
+        </div>
+      </div>
+
+      <div class="exh-wshits" id="ws-hits">
+        <div class="exh-wshits-head">
+          <span><i class="ph ph-list-bullets" style="font-size:11px;"></i> Hits across 3 exhibits</span>
+          <button class="exh-wshits-close" onclick="document.getElementById('ws-hits').style.display='none'">✕ clear</button>
+        </div>
+        <div class="exh-wshits-list">
+          <div class="exh-wshits-grp">
+            <div class="exh-wshits-grp-head">
+              <span class="exh-row-letter">A</span>
+              <span class="exh-wshits-grp-ttl">Audit report — metro division</span>
+              <span class="exh-wshits-grp-count">4 hits</span>
+            </div>
+            <button class="exh-wshits-hit">
+              <div class="exh-wshits-hit-text">
+                <span class="exh-wshits-hit-ctx">…the </span><mark class="exh-wshits-hit-mark">metro audit</mark><span class="exh-wshits-hit-ctx"> findings of November 2016 identified seven distinct gaps in documentation across…</span>
+              </div>
+              <div class="exh-wshits-hit-meta">
+                <span class="exh-pill mute">p. 3</span>
+                <span class="exh-pill go"><i class="ph ph-arrow-right" style="font-size:9px;"></i> open</span>
+              </div>
+            </button>
+            <button class="exh-wshits-hit">
+              <div class="exh-wshits-hit-text">
+                <span class="exh-wshits-hit-ctx">…subsequent </span><mark class="exh-wshits-hit-mark">metro audit</mark><span class="exh-wshits-hit-ctx"> revealed that compliance fell short of the 2017 standard, particularly in confined-space…</span>
+              </div>
+              <div class="exh-wshits-hit-meta">
+                <span class="exh-pill mute">p. 8</span>
+                <span class="exh-pill go"><i class="ph ph-arrow-right" style="font-size:9px;"></i> open</span>
+              </div>
+            </button>
+          </div>
+          <div class="exh-wshits-grp">
+            <div class="exh-wshits-grp-head">
+              <span class="exh-row-letter">D</span>
+              <span class="exh-wshits-grp-ttl">Local news coverage</span>
+              <span class="exh-wshits-grp-count">2 hits</span>
+            </div>
+            <button class="exh-wshits-hit">
+              <div class="exh-wshits-hit-text">
+                <span class="exh-wshits-hit-ctx">…the </span><mark class="exh-wshits-hit-mark">metro audit</mark><span class="exh-wshits-hit-ctx"> report, released after a six-month delay, drew sharp criticism from union…</span>
+              </div>
+              <div class="exh-wshits-hit-meta">
+                <span class="exh-pill go"><i class="ph ph-arrow-right" style="font-size:9px;"></i> open</span>
+              </div>
+            </button>
+          </div>
+          <div class="exh-wshits-grp">
+            <div class="exh-wshits-grp-head">
+              <span class="exh-row-letter">F</span>
+              <span class="exh-wshits-grp-ttl">Internal memo on July changes</span>
+              <span class="exh-wshits-grp-count">1 hit</span>
+            </div>
+            <button class="exh-wshits-hit">
+              <div class="exh-wshits-hit-text">
+                <span class="exh-wshits-hit-ctx">…response to the </span><mark class="exh-wshits-hit-mark">metro audit</mark><span class="exh-wshits-hit-ctx">, the department will implement a triple-signoff for contractor onboarding…</span>
+              </div>
+              <div class="exh-wshits-hit-meta">
+                <span class="exh-pill go"><i class="ph ph-arrow-right" style="font-size:9px;"></i> open</span>
+              </div>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="exh-split">
+        <div class="exh-left">
+          <div class="exh-left-head">
+            <i class="ph ph-files" style="font-size:12px;"></i>
+            <span>Exhibits</span>
+            <div class="exh-list-sum">12</div>
+          </div>
+          <div class="exh-left-filter">
+            <i class="ph ph-funnel" style="font-size:11px;"></i>
+            <input class="exh-list-filter" placeholder="Filter by name, URL, tag…" />
+          </div>
+          <div class="exh-list">
+            <button class="exh-row active">
+              <div class="exh-row-letter">A</div>
+              <div class="exh-row-body">
+                <div class="exh-row-ttl">Audit report — metro division</div>
+                <div class="exh-row-meta">
+                  <span class="exh-pill ok"><i class="ph ph-check-circle" style="font-size:10px;"></i> archived</span>
+                  <span class="exh-row-dot">·</span>
+                  <span>PDF</span>
+                </div>
+              </div>
+              <div class="exh-row-hits">4 hits</div>
+            </button>
+            <button class="exh-row">
+              <div class="exh-row-letter">B</div>
+              <div class="exh-row-body">
+                <div class="exh-row-ttl">OHS standards manual 2024</div>
+                <div class="exh-row-meta">
+                  <span class="exh-pill ok"><i class="ph ph-check-circle" style="font-size:10px;"></i> archived</span>
+                  <span class="exh-row-dot">·</span>
+                  <span>PDF</span>
+                </div>
+              </div>
+            </button>
+            <button class="exh-row">
+              <div class="exh-row-letter">C</div>
+              <div class="exh-row-body">
+                <div class="exh-row-ttl">Procurement RFQ — boilers</div>
+                <div class="exh-row-meta">
+                  <span class="exh-pill ok"><i class="ph ph-check-circle" style="font-size:10px;"></i> archived</span>
+                  <span class="exh-row-dot">·</span>
+                  <span>PDF</span>
+                </div>
+              </div>
+            </button>
+            <button class="exh-row">
+              <div class="exh-row-letter">D</div>
+              <div class="exh-row-body">
+                <div class="exh-row-ttl">Local news coverage</div>
+                <div class="exh-row-meta">
+                  <span class="exh-pill warn"><i class="ph ph-globe" style="font-size:10px;"></i> web</span>
+                  <span class="exh-row-dot">·</span>
+                  <span>Web</span>
+                </div>
+              </div>
+              <div class="exh-row-hits">2 hits</div>
+            </button>
+            <button class="exh-row">
+              <div class="exh-row-letter">E</div>
+              <div class="exh-row-body">
+                <div class="exh-row-ttl">Council meeting minutes</div>
+                <div class="exh-row-meta">
+                  <span class="exh-pill ok"><i class="ph ph-check-circle" style="font-size:10px;"></i> archived</span>
+                  <span class="exh-row-dot">·</span>
+                  <span>PDF</span>
+                </div>
+              </div>
+            </button>
+            <button class="exh-row">
+              <div class="exh-row-letter">F</div>
+              <div class="exh-row-body">
+                <div class="exh-row-ttl">Internal memo on July changes</div>
+                <div class="exh-row-meta">
+                  <span class="exh-pill mute"><i class="ph ph-file" style="font-size:10px;"></i> local</span>
+                  <span class="exh-row-dot">·</span>
+                  <span>PDF</span>
+                </div>
+              </div>
+              <div class="exh-row-hits">1 hit</div>
+            </button>
+            <button class="exh-row">
+              <div class="exh-row-letter">G</div>
+              <div class="exh-row-body">
+                <div class="exh-row-ttl">Spreadsheet — vendor list</div>
+                <div class="exh-row-meta">
+                  <span class="exh-pill mute"><i class="ph ph-file" style="font-size:10px;"></i> local</span>
+                  <span class="exh-row-dot">·</span>
+                  <span>CSV</span>
+                </div>
+              </div>
+            </button>
+            <button class="exh-row">
+              <div class="exh-row-letter">H</div>
+              <div class="exh-row-body">
+                <div class="exh-row-ttl">Contractor agreement</div>
+                <div class="exh-row-meta">
+                  <span class="exh-pill ok"><i class="ph ph-check-circle" style="font-size:10px;"></i> archived</span>
+                  <span class="exh-row-dot">·</span>
+                  <span>PDF</span>
+                </div>
+              </div>
+            </button>
+          </div>
+        </div>
+
+        <div class="exh-mid">
+          <div class="exh-mid-head">
+            <div class="exh-mid-id">
+              <div class="exh-mid-letter">A</div>
+              <div class="exh-mid-ttls">
+                <div class="exh-mid-ttl">Audit report — metro division</div>
+                <div class="exh-mid-sub">
+                  <span>PDF</span>
+                  <span class="exh-mid-dot">·</span>
+                  <span>2.4 MB</span>
+                  <span class="exh-mid-dot">·</span>
+                  <a class="exh-mid-link" href="#" onclick="return false">archive.org</a>
+                </div>
+              </div>
+            </div>
+            <div class="exh-mid-actions">
+              <button class="exh-chip"><i class="ph ph-arrow-square-out" style="font-size:11px;"></i> Full viewer</button>
+            </div>
+          </div>
+
+          <div class="exh-findbar">
+            <i class="ph ph-magnifying-glass" style="font-size:12px;"></i>
+            <input class="exh-find-inp" placeholder="Find in this exhibit…" value="metro audit" />
+            <button class="exh-find-btn"><i class="ph ph-caret-up" style="font-size:12px;"></i></button>
+            <button class="exh-find-btn"><i class="ph ph-caret-down" style="font-size:12px;"></i></button>
+            <span class="exh-find-count">1 / 4</span>
+          </div>
+
+          <div class="exh-mid-body">
+            <div class="exh-pdf">
+              <div class="exh-pdf-page" data-page-number="3" style="width:720px;height:920px;">
+                <div class="pdf-fake">
+                  <div class="pdf-num">EXHIBIT A · p. 3 of 24</div>
+                  <h1>Findings — Metro Division Compliance Audit</h1>
+                  <div class="pdf-meta">November 2016 · Office of the Auditor General · INTERNAL DRAFT</div>
+                  <p>The <mark class="pdf-sel">metro audit</mark> findings of November 2016 identified seven distinct gaps in documentation across the procurement, occupational health, and contractor-onboarding processes maintained by the Metro Division.</p>
+                  <p>Across the sample period (June 2015 – October 2016), the division processed 412 contractor engagements. Of these, 38% lacked a signed safety acknowledgment prior to site mobilisation, and 22% lacked the secondary signoff required under §4.2.1 of the prevailing OHS standards manual.</p>
+                  <p>Beginning July 1, 2017, all metro contractors will be required to complete the new triple-signoff process described in Appendix C of this report. The transition period for legacy engagements ends December 31, 2017.</p>
+                  <p>The audit team further notes a pattern of failure to maintain documentation supporting subsequent confined-space entries, which under the standards manual triggers an automatic suspension of the relevant work authorisation. Eleven such suspensions ought to have been issued during the audit window; none were.</p>
+                  <p>Recommendations are summarised in Section 4 of this report, with implementation timelines contingent on procurement and contracting workflow changes detailed in the accompanying procurement RFQ exhibit.</p>
+                </div>
+                <div class="exh-pdf-pagelbl">p. 3</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="exh-capturebar" style="display:flex;">
+            <div class="exh-cap-quote">
+              <span class="exh-cap-ctx">…The </span>
+              <mark class="exh-cap-mark">metro audit findings of November 2016 identified seven distinct gaps in documentation</mark>
+              <span class="exh-cap-ctx"> across the procurement, occupational health, and contractor-onboarding processes…</span>
+            </div>
+            <div class="exh-cap-meta">
+              <span class="exh-cap-letter">A</span>
+              <span class="exh-cap-srctitle">Audit report — metro division</span>
+              <span class="exh-cap-page">p. 3</span>
+              <span class="exh-cap-len">112 chars</span>
+            </div>
+            <div class="exh-cap-actions">
+              <button class="exh-cap-btn primary"><i class="ph ph-scissors" style="font-size:12px;"></i> Save as cited text</button>
+              <button class="exh-cap-btn"><i class="ph ph-arrow-bend-up-right" style="font-size:12px;"></i> Stage for editor</button>
+              <button class="exh-cap-btn ghost"><i class="ph ph-copy" style="font-size:12px;"></i> Copy</button>
+              <button class="exh-cap-close" title="Dismiss">✕</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+  // Quick toggle for the workspace-search results bar so reviewers can
+  // see both states without having to type into the input.
+  const toggle = document.getElementById('toggle-search');
+  const hits = document.getElementById('ws-hits');
+  const status = document.getElementById('ws-search-status');
+  const wsInp = document.getElementById('ws-search-inp');
+  function setShown(shown) {
+    hits.style.display = shown ? '' : 'none';
+    toggle.textContent = shown ? 'hide workspace-wide search results' : 'show workspace-wide search results';
+    status.textContent = shown ? '7 hits in 3 exhibits' : '';
+    wsInp.value = shown ? 'metro audit' : '';
+  }
+  toggle.addEventListener('click', (e) => {
+    e.preventDefault();
+    setShown(hits.style.display === 'none');
+  });
+</script>
+</body>
+</html>

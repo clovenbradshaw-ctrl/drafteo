@@ -83,46 +83,35 @@
       clear(sidebar);
       sidebar.appendChild(workspaceHeader(ws, app, () => render(ws_id, tabs.active, app)));
 
-      // Search button — opens the full Source Explorer (Cmd/K shortcut).
-      const searchBtn = el('button.ws-search', {
-        onClick: () => {
-          if (window.SourceExplorer && window.SourceExplorer.open) window.SourceExplorer.open(ws_id, {});
-          else window.SearchSources.open(ws_id, app);
-        },
-      },
-        icon('magnifying-glass'),
-        el('span', 'Explore sources…'),
-        el('span.kbd', '⌘K'),
-      );
-      sidebar.appendChild(searchBtn);
-
-      // Corkboard button
-      const corkBtn = el('button.ws-search', { style: { borderTop: 0 }, onClick: () => openCorkboard() },
-        icon('squares-four'),
-        el('span', 'Corkboard'),
-        el('span.kbd', String(Store.listEvidence(ws_id).length || '')),
-      );
-      sidebar.appendChild(corkBtn);
-
-      // Exhibits button — workspace-wide list of ingested URLs/documents,
-      // click-and-confirm to open. Distinct from "Sources" (the URL index).
       const allExhibitsCount = Store.listDocuments(ws_id)
         .reduce((n, d) => n + Store.listSources(d.id).length, 0);
-      const exhIndexBtn = el('button.ws-search', { style: { borderTop: 0 }, onClick: () => openExhibitsIndex() },
+
+      // Primary nav: Exhibits is the explorer. Cmd-K focuses its search.
+      const exhIndexBtn = el('button.ws-search', {
+        onClick: () => openExhibitsIndex({ focusSearch: true }),
+        title: 'Open the Exhibits tab — search across every exhibit',
+      },
         icon('files'),
         el('span', 'Exhibits'),
-        el('span.kbd', String(allExhibitsCount || '')),
+        el('span.kbd', '⌘K'),
       );
       sidebar.appendChild(exhIndexBtn);
 
-      // Sources button — flat URL list (was "Source URLs"; a "source" is
-      // just the URL behind an exhibit per the workspace vocabulary).
+      // Sources: strictly the citation-URL list. Distinct from Exhibits.
       const srcIndexBtn = el('button.ws-search', { style: { borderTop: 0 }, onClick: () => openSourcesIndex() },
         icon('link-simple'),
         el('span', 'Sources'),
         el('span.kbd', String(allExhibitsCount || '')),
       );
       sidebar.appendChild(srcIndexBtn);
+
+      // Corkboard
+      const corkBtn = el('button.ws-search', { style: { borderTop: 0 }, onClick: () => openCorkboard() },
+        icon('squares-four'),
+        el('span', 'Corkboard'),
+        el('span.kbd', String(Store.listEvidence(ws_id).length || '')),
+      );
+      sidebar.appendChild(corkBtn);
 
       // Drafts section
       const draftsSection = el('div.ws-section');
@@ -149,68 +138,94 @@
       draftsSection.appendChild(draftList);
       sidebar.appendChild(draftsSection);
 
-      // Cited text section — saved verbatim spans (was "exhibits").
-      const exhibitsSection = el('div.ws-section');
-      const exhibits = Store.listExhibits(ws_id);
-      exhibitsSection.appendChild(el('div.ws-section-head',
-        el('span', icon('scissors'), ' CITED TEXT'),
-        el('span', { style: { fontSize: '10px', color: 'var(--ink-faint)' } }, exhibits.length ? String(exhibits.length) : ''),
-      ));
-      const exhibitsList = el('div.ws-tree');
-      for (const ex of exhibits) {
-        let provenanceLabel = '';
-        if (ex.source_id) {
-          for (const d of Store.listDocuments(ws_id)) {
-            const s = Store.getSource(d.id, ex.source_id);
-            if (s) { provenanceLabel = s.title || s.filename; break; }
-          }
-        } else if (ex.doc_id) {
-          const d = Store.getDocument(ex.doc_id);
-          if (d) provenanceLabel = d.title;
-        }
-        const row = el('div.ws-tree-row',
-          { onClick: () => openExhibitDetail(ex), title: ex.text },
-          el('span.ico', icon('quotes')),
-          el('span.name', ex.label || (ex.text || '').slice(0, 50)),
-          el('span.meta', provenanceLabel.slice(0, 14)),
-        );
-        exhibitsList.appendChild(row);
+      // Build lettered exhibit records workspace-wide using bucket-aware
+      // labels when src/buckets.js is loaded. Falls back to plain letters.
+      const allDocsForExh = allDocs;
+      const exhRecs = [];
+      for (const d of allDocsForExh) {
+        for (const s of Store.listSources(d.id)) exhRecs.push({ source: s, doc_id: d.id, doc_title: d.title, source_id: s.source_id, doc: { id: d.id, title: d.title } });
       }
-      if (exhibits.length === 0) {
-        exhibitsList.appendChild(el('div.ws-tree-empty', 'Select text in an exhibit or draft and "Save as cited text" to clip evidence here.'));
+      let letterBySrc = {};
+      if (window.Buckets && window.Buckets.letterMap) {
+        letterBySrc = window.Buckets.letterMap(ws_id, exhRecs);
+        // Apply letters back onto recs for downstream use
+        exhRecs.forEach(r => { r.letter = letterBySrc[r.source_id] || '?'; });
+        exhRecs.sort((a, b) => a.letter.localeCompare(b.letter, undefined, { numeric: true }));
+      } else {
+        exhRecs.sort((a, b) => (a.source.uploaded_at || 0) - (b.source.uploaded_at || 0));
+        const letterFor = (window.ExhibitsIndex && window.ExhibitsIndex.letterFor)
+          ? window.ExhibitsIndex.letterFor
+          : (i) => String.fromCharCode(65 + (i % 26));
+        exhRecs.forEach((r, i) => { r.letter = letterFor(i); });
+        letterBySrc = Object.fromEntries(exhRecs.map(r => [r.source_id, r.letter]));
       }
-      exhibitsSection.appendChild(exhibitsList);
-      sidebar.appendChild(exhibitsSection);
 
-      // Exhibits section (ingested URLs/docs across all drafts in this workspace).
-      const sourcesSection = el('div.ws-section');
-      sourcesSection.appendChild(el('div.ws-section-head',
-        el('span', icon('paperclip'), ' EXHIBITS'),
-        el('button.iconbtn.ghost', { title: 'Add an exhibit to the active draft', onClick: () => addSourceToActive() }, icon('plus')),
+      // Compact EXHIBITS preview — letter chips, capped, opens full tab.
+      const exhibitsPreview = el('div.ws-section');
+      exhibitsPreview.appendChild(el('div.ws-section-head',
+        el('span', icon('files'), ' EXHIBITS',
+          exhRecs.length ? el('span.ws-section-count', String(exhRecs.length)) : null),
+        el('div', { style: { display: 'flex', gap: '4px' } },
+          el('button.iconbtn.ghost', { title: 'Open Exhibits tab', onClick: () => openExhibitsIndex() }, icon('arrows-out-simple')),
+          el('button.iconbtn.ghost', { title: 'Add an exhibit to the active draft', onClick: () => addSourceToActive() }, icon('plus')),
+        ),
       ));
-      const sourceList = el('div.ws-tree');
-      const allSources = [];
-      for (const d of allDocs) {
-        for (const s of Store.listSources(d.id)) allSources.push(Object.assign({ doc_id: d.id, doc_title: d.title }, s));
-      }
-      for (const s of allSources) {
-        const isWeb = !!s.source_url;
-        sourceList.appendChild(el('div.ws-tree-row',
+      const exhPreviewList = el('div.ws-exh-preview');
+      const PREVIEW_CAP = 8;
+      const previewed = exhRecs.slice(0, PREVIEW_CAP);
+      for (const r of previewed) {
+        const s = r.source;
+        const kind = s.archive_org_url ? 'ok' : (s.source_url ? 'warn' : 'mute');
+        const row = el('button.ws-exh-row',
           {
-            onClick: () => openSource(s.doc_id, s.source_id),
-            onContextmenu: (e) => { e.preventDefault(); openSourceMenu(e, s); },
-            title: s.title + (s.archive_org_url ? ' (archived)' : ' (not archived)'),
+            onClick: () => {
+              if (window.__openExhibitsTab) window.__openExhibitsTab({ sourceId: s.source_id });
+            },
+            onContextmenu: (e) => { e.preventDefault(); openSourceMenu(e, Object.assign({ doc_id: r.doc_id, doc_title: r.doc_title }, s)); },
+            title: (s.title || s.filename) + (s.archive_org_url ? ' (archived)' : (s.source_url ? ' (web, not yet archived)' : ' (local file)')),
           },
-          el('span.ico', icon(isWeb ? 'globe' : 'file')),
-          el('span.name', s.title || s.filename),
-          el('span.meta', s.archive_org_url ? icon('check-circle') : icon('warning')),
+          el('span.ws-exh-letter.' + kind, r.letter),
+          el('span.ws-exh-name', s.title || s.filename || 'Untitled'),
+        );
+        exhPreviewList.appendChild(row);
+      }
+      if (exhRecs.length === 0) {
+        exhPreviewList.appendChild(el('div.ws-tree-empty', 'No exhibits yet. Upload or import in the active draft\'s right panel.'));
+      }
+      if (exhRecs.length > PREVIEW_CAP) {
+        exhPreviewList.appendChild(el('button.ws-exh-more',
+          { onClick: () => openExhibitsIndex() },
+          '+ ' + (exhRecs.length - PREVIEW_CAP) + ' more — open Exhibits',
         ));
       }
-      if (allSources.length === 0) {
-        sourceList.appendChild(el('div.ws-tree-empty', 'No exhibits yet. Upload or import in the active draft\'s right panel.'));
+      exhibitsPreview.appendChild(exhPreviewList);
+      sidebar.appendChild(exhibitsPreview);
+
+      // CITED TEXT section — saved verbatim spans, each tagged with its
+      // exhibit's letter so it lines up with the Exhibits tab.
+      const citedSection = el('div.ws-section');
+      const exhibits = Store.listExhibits(ws_id);
+      citedSection.appendChild(el('div.ws-section-head',
+        el('span', icon('scissors'), ' CITED TEXT',
+          exhibits.length ? el('span.ws-section-count', String(exhibits.length)) : null),
+      ));
+      const citedList = el('div.ws-tree');
+      for (const ex of exhibits) {
+        const letter = ex.source_id ? (letterBySrc[ex.source_id] || '?') : '§';
+        const page = ex.provenance && ex.provenance.page ? ' · p. ' + ex.provenance.page : '';
+        const row = el('div.ws-cited-row',
+          { onClick: () => openExhibitDetail(ex), title: ex.text },
+          el('span.ws-cited-letter', letter),
+          el('span.ws-cited-quote', ex.label || '“' + (ex.text || '').slice(0, 64) + '”'),
+          el('span.ws-cited-meta', page),
+        );
+        citedList.appendChild(row);
       }
-      sourcesSection.appendChild(sourceList);
-      sidebar.appendChild(sourcesSection);
+      if (exhibits.length === 0) {
+        citedList.appendChild(el('div.ws-tree-empty', 'Highlight a passage in any exhibit and “Save as cited text” to clip evidence here.'));
+      }
+      citedSection.appendChild(citedList);
+      sidebar.appendChild(citedSection);
 
       // Members section
       const membersSection = el('div.ws-section');
@@ -676,7 +691,12 @@
       renderSidebar();
     }
 
-    function openExhibitsIndex() {
+    // Options stashed by openExhibitsIndex({...}) and consumed by
+    // renderContent() on the next render of the Exhibits tab.
+    let pendingExhibitsOpts = null;
+
+    function openExhibitsIndex(opts) {
+      pendingExhibitsOpts = opts || null;
       tabs.active = '__exhibits_index__';
       if (!tabs.open.includes('__exhibits_index__')) tabs.open.push('__exhibits_index__');
       saveTabs();
@@ -684,8 +704,10 @@
       renderContent();
       renderSidebar();
     }
-    // Let other views (like SourcesIndex) reuse the source-tab opener.
+    // Let other views (Sources tab, Source Explorer shim, the editor's
+    // cite picker) open the Exhibits tab with optional initial state.
     window.__openSourceTab = (doc_id, source_id) => openSource(doc_id, source_id);
+    window.__openExhibitsTab = (opts) => openExhibitsIndex(opts || {});
 
     function openSource(doc_id, source_id) {
       const key = sourceTabKey(doc_id, source_id);
@@ -709,7 +731,8 @@
         return;
       }
       if (tabs.active === '__exhibits_index__') {
-        content.appendChild(window.ExhibitsIndex.open(ws_id, app));
+        const opts = pendingExhibitsOpts; pendingExhibitsOpts = null;
+        content.appendChild(window.ExhibitsIndex.open(ws_id, app, opts || {}));
         return;
       }
       if (typeof tabs.active === 'string' && tabs.active.indexOf('__src__:') === 0) {
@@ -746,6 +769,7 @@
     // something into a doc in this workspace).
     const onSourcesUpdated = () => { try { renderSidebar(); renderTabs(); } catch (_) {} };
     window.addEventListener('drafteo:sources-updated', onSourcesUpdated);
+    window.addEventListener('drafteo:buckets-updated', onSourcesUpdated);
   }
 
   // Tab keys for source viewers embed the document's Matrix room id, which
