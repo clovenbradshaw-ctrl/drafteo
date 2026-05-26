@@ -1040,6 +1040,24 @@
       ));
     }
     host.appendChild(legend);
+
+    // ---- Live updates ----
+    // When a remote collaborator changes evidence / strings / holons,
+    // the shim folds the new events and dispatches drafteo:workspace-state.
+    // Re-render the board (and re-paint board tabs, since they may have
+    // gained or lost members). The listener auto-removes itself once the
+    // corkboard host is detached from the DOM.
+    const _onWorkspaceState = (ev) => {
+      if (ev.detail && ev.detail.ws_id && ev.detail.ws_id !== ws_id) return;
+      if (!document.contains(host)) {
+        window.removeEventListener('drafteo:workspace-state', _onWorkspaceState);
+        return;
+      }
+      renderBoardTabs();
+      renderAll();
+    };
+    window.addEventListener('drafteo:workspace-state', _onWorkspaceState);
+
     return host;
   }
 

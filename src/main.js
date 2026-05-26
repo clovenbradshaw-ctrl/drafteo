@@ -22,6 +22,7 @@
 
 import './legacy-store.js';
 import './stubs.js';
+import './recovery-modals.js';
 
 import './dom.js';
 import './eo.js';
