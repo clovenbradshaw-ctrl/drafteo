@@ -114,7 +114,7 @@
     const dekInput = el('input.dekinput', { type: 'text', placeholder: 'Standfirst / dek (optional)', value: doc.dek || '', onInput: () => markDirty() });
 
     const body = el('div.body', { contentEditable: 'true', spellcheck: 'true' });
-    body.setAttribute('data-placeholder', 'Start writing. Type / for sources, citations, and blocks. Highlight text to comment or suggest.');
+    body.setAttribute('data-placeholder', 'Start writing. Type / for exhibits, citations, and blocks. Highlight text to comment or suggest.');
 
     const wordCountEl = el('span');
     const statusEl = el('div.statusdot.saved', el('span.dot'), el('span', 'SAVED'));
@@ -150,7 +150,7 @@
     );
 
     const tabSources = el('button.tab.active', { onClick: () => setTab('sources') },
-      icon('files'), ' SOURCES'
+      icon('files'), ' EXHIBITS'
     );
     const tabComments = el('button.tab', { onClick: () => setTab('comments') },
       icon('chat-circle-text'), ' COMMENTS'
@@ -277,7 +277,14 @@
       body.dispatchEvent(new Event('input', { bubbles: true }));
       placeSelToolbar();
     }
-    selToolbar.appendChild(el('button', { title: 'Heading 2', onMousedown: (e) => { e.preventDefault(); block('H2'); } }, icon('text-h')));
+    // Heading group — H1/H2/H3/H4 plus a paragraph reset so changing
+    // section level is one click instead of digging through the slash menu.
+    selToolbar.appendChild(el('button', { title: 'Paragraph (clear heading)', onMousedown: (e) => { e.preventDefault(); block('P'); } }, icon('paragraph')));
+    selToolbar.appendChild(el('button', { title: 'Heading 1', onMousedown: (e) => { e.preventDefault(); block('H1'); } }, icon('text-h-one')));
+    selToolbar.appendChild(el('button', { title: 'Heading 2', onMousedown: (e) => { e.preventDefault(); block('H2'); } }, icon('text-h-two')));
+    selToolbar.appendChild(el('button', { title: 'Heading 3', onMousedown: (e) => { e.preventDefault(); block('H3'); } }, icon('text-h-three')));
+    selToolbar.appendChild(el('button', { title: 'Heading 4', onMousedown: (e) => { e.preventDefault(); block('H4'); } }, icon('text-h-four')));
+    selToolbar.appendChild(el('div.sep'));
     selToolbar.appendChild(el('button', { title: 'Bold (⌘B)', onMousedown: (e) => { e.preventDefault(); exec('bold'); } }, icon('text-b')));
     selToolbar.appendChild(el('button', { title: 'Italic (⌘I)', onMousedown: (e) => { e.preventDefault(); exec('italic'); } }, icon('text-italic')));
     selToolbar.appendChild(el('button', { title: 'Strikethrough', onMousedown: (e) => { e.preventDefault(); exec('strikeThrough'); } }, icon('text-strikethrough')));
@@ -288,8 +295,8 @@
     selToolbar.appendChild(el('button', { title: 'Blockquote', onMousedown: (e) => { e.preventDefault(); block('BLOCKQUOTE'); } }, icon('quotes')));
     selToolbar.appendChild(el('button', { title: 'Link', onMousedown: (e) => { e.preventDefault(); const u = prompt('Link URL'); if (u) exec('createLink', u); } }, icon('link')));
     selToolbar.appendChild(el('div.sep'));
-    selToolbar.appendChild(el('button.accent', { title: 'Cite from sources', onMousedown: (e) => { e.preventDefault(); openCitePicker(); } }, icon('quotes'), el('span', ' Cite')));
-    selToolbar.appendChild(el('button.accent', { title: 'Save selection as quote from new source (URL snapshot)', onMousedown: (e) => { e.preventDefault(); openGrabFromUrl(); } }, icon('link-simple'), el('span', ' From URL')));
+    selToolbar.appendChild(el('button.accent', { title: 'Cite from exhibits', onMousedown: (e) => { e.preventDefault(); openCitePicker(); } }, icon('quotes'), el('span', ' Cite')));
+    selToolbar.appendChild(el('button.accent', { title: 'Save selection as cited text from new exhibit (URL snapshot)', onMousedown: (e) => { e.preventDefault(); openGrabFromUrl(); } }, icon('link-simple'), el('span', ' From URL')));
     selToolbar.appendChild(el('div.sep'));
     selToolbar.appendChild(el('button', { title: 'Comment on this selection', onMousedown: (e) => { e.preventDefault(); const sel = window.getSelection(); if (sel && !sel.isCollapsed) openCommentPopover({ text: sel.toString(), range: sel.getRangeAt(0).cloneRange() }); } }, icon('chat-circle-text')));
     selToolbar.appendChild(el('button', { title: 'Suggest an edit', onMousedown: (e) => { e.preventDefault(); const sel = window.getSelection(); if (sel && !sel.isCollapsed) openSuggestPopover({ text: sel.toString(), range: sel.getRangeAt(0).cloneRange() }); } }, icon('git-pull-request')));
@@ -328,10 +335,10 @@
       const scrim = el('div.scrim', { onClick: (e) => { if (e.target === scrim) scrim.remove(); } });
 
       let chosen = null;
-      const searchInp = el('input', { type: 'text', placeholder: 'Filter sources by title, tag, filename, URL…', style: { marginBottom: '10px' } });
+      const searchInp = el('input', { type: 'text', placeholder: 'Filter exhibits by title, tag, filename, URL…', style: { marginBottom: '10px' } });
       const list = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '36vh', overflowY: 'auto', marginBottom: '14px' } });
       const pageInp = el('input', { type: 'text', placeholder: 'p. 7  ·  Exhibit C  ·  rows 12–58' });
-      const passageTa = el('textarea', { rows: 3, placeholder: 'Click an exhibit below — or type/paste the passage directly.' });
+      const passageTa = el('textarea', { rows: 3, placeholder: 'Click a cited text below — or type/paste the passage directly.' });
 
       // If user "Use as passage"d a span from the source viewer, prefill it
       // and show a small banner so they know it's been pulled in.
@@ -339,7 +346,7 @@
       const stagedBanner = stagedPassage
         ? el('div.staged-banner',
             icon('scissors', 12),
-            el('span', { style: { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.1em' } }, 'Staged from source — '),
+            el('span', { style: { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.1em' } }, 'Staged from exhibit — '),
             el('span', { style: { color: 'var(--ink-dim)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
               '"' + stagedPassage.slice(0, 80) + (stagedPassage.length > 80 ? '…' : '') + '"'),
             el('button.ghost', {
@@ -352,9 +359,9 @@
       const noteInp = el('input', { type: 'text', placeholder: 'Optional internal note (won\'t be published)' });
       const previewBox = el('div.cite-preview');
 
-      // Unified "find passage" picker — searches BOTH saved exhibits AND the
-      // source's plaintext. Results render as a clean two-section table.
-      const exhSearch = el('input', { type: 'text', placeholder: 'Search saved exhibits and inside the source text…' });
+      // Unified "find passage" picker — searches BOTH saved cited text AND the
+      // exhibit's plaintext. Results render as a clean two-section table.
+      const exhSearch = el('input', { type: 'text', placeholder: 'Search saved cited text and inside the exhibit text…' });
       const exhList = el('div.cite-exh-list');
       const exhWrap = el('div.cite-exh-wrap', { style: { display: 'none' } },
         el('div.cite-exh-head',
@@ -424,19 +431,19 @@
         if (totalCount === 0) {
           if (needle) {
             exhList.appendChild(el('div.cite-exh-empty',
-              el('div', 'No matches in saved exhibits or source text.'),
+              el('div', 'No matches in saved cited text or exhibit text.'),
               el('div', { style: { marginTop: '4px', fontSize: '11px', color: 'var(--ink-faint)' } },
                 'Try a shorter query, or type your passage in the field above.'),
             ));
           } else if (exhibitsForChosen().length === 0) {
             exhList.appendChild(el('div.cite-exh-empty',
-              el('div', 'No saved exhibits in this workspace yet.'),
+              el('div', 'No saved cited text in this workspace yet.'),
               el('div', { style: { marginTop: '4px', fontSize: '11px', color: 'var(--ink-faint)' } },
-                'Type a query above to search the source text, or open the source and right-click to save exhibits.'),
+                'Type a query above to search the exhibit text, or open the exhibit and right-click to save cited text.'),
             ));
           } else {
             exhList.appendChild(el('div.cite-exh-empty',
-              'Type a query to filter exhibits or search inside the source.'));
+              'Type a query to filter cited text or search inside the exhibit.'));
           }
           return;
         }
@@ -445,7 +452,7 @@
         const table = el('div.cite-table');
 
         if (exhibits.length > 0) {
-          table.appendChild(el('div.cite-table-section', 'Saved exhibits (' + exhibits.length + ')'));
+          table.appendChild(el('div.cite-table-section', 'Saved cited text (' + exhibits.length + ')'));
           for (const ex of exhibits) {
             const tied = ex.source_id === chosen.source_id;
             const txt = (ex.text || '').slice(0, 200);
@@ -457,14 +464,14 @@
                 ex.label ? el('div.cite-quote-label', ex.label) : null,
               ),
               el('div.cite-cell.cite-cell-meta',
-                tied ? el('span.cite-pill.tied', 'this source') : el('span.cite-pill.cross', (ex.provenance && ex.provenance.source_title) ? ex.provenance.source_title.slice(0, 24) : 'other source'),
+                tied ? el('span.cite-pill.tied', 'this exhibit') : el('span.cite-pill.cross', (ex.provenance && ex.provenance.source_title) ? ex.provenance.source_title.slice(0, 24) : 'other exhibit'),
               ),
             ));
           }
         }
 
         if (srcHits.length > 0) {
-          table.appendChild(el('div.cite-table-section', 'In source text (' + srcHits.length + ')'));
+          table.appendChild(el('div.cite-table-section', 'In exhibit text (' + srcHits.length + ')'));
           for (const hit of srcHits) {
             table.appendChild(el('button.cite-row',
               { type: 'button', onClick: () => pickSourceHit(hit) },
@@ -788,17 +795,34 @@
           return;
         }
 
-        // Read plain text without blocking the native paste — we only
-        // inspect for URLs and offer to import.
-        const text = data.getData('text/plain') || data.getData('text/html') || '';
-        if (!text) return;
+        // Read every clipboard text flavour and concatenate so we never
+        // miss a URL that's only present in one (Chrome puts URLs in
+        // text/uri-list, Safari sometimes only in text/html).
+        const parts = [
+          data.getData('text/plain'),
+          data.getData('text/uri-list'),
+          data.getData('text/html'),
+        ].filter(Boolean);
+        if (parts.length === 0) return;
+        const text = parts.join('\n');
         const urls = window.SourcePanel && window.SourcePanel.extractUrlsFromText
           ? window.SourcePanel.extractUrlsFromText(text)
           : [];
         if (urls.length === 0) return;
-        // Filter out URLs already attached as sources for this doc.
-        const existing = new Set((Store.listSources(doc_id) || []).map(s => s.source_url).filter(Boolean));
-        const fresh = urls.filter(u => !existing.has(u));
+        // Filter out URLs already attached as exhibits for this doc.
+        // Normalise both sides so trailing-slash / fragment drift doesn't
+        // make a fresh paste look like a duplicate.
+        const norm = (u) => String(u).replace(/#.*$/, '').replace(/\/+$/, '').toLowerCase();
+        const existing = new Set((Store.listSources(doc_id) || [])
+          .map(s => s.source_url).filter(Boolean).map(norm));
+        const seen = new Set();
+        const fresh = [];
+        for (const u of urls) {
+          const key = norm(u);
+          if (existing.has(key) || seen.has(key)) continue;
+          seen.add(key);
+          fresh.push(u);
+        }
         if (fresh.length === 0) return;
         // Defer so the actual paste lands first, then surface the prompt.
         setTimeout(() => offerImportPastedUrls(fresh), 0);
@@ -962,6 +986,7 @@
       pasteBanner = banner;
       banner._render();
       page.parentElement.insertBefore(banner, page);
+      try { banner.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (_) {}
       // Auto-dismiss after 30 s if untouched.
       setTimeout(() => { if (pasteBanner === banner) close(); }, 30000);
     }
@@ -1418,9 +1443,11 @@
       return el('button', { onClick: (e) => { e.preventDefault(); fn(); }, title: title || label }, icon(ic));
     }
     return el('div.formatbar',
+      btn('paragraph', 'P', () => block('P'), 'Paragraph'),
       btn('text-h-one', 'H1', () => block('H1'), 'Heading 1'),
       btn('text-h-two', 'H2', () => block('H2'), 'Heading 2'),
       btn('text-h-three', 'H3', () => block('H3'), 'Heading 3'),
+      btn('text-h-four', 'H4', () => block('H4'), 'Heading 4'),
       el('div.sep'),
       btn('text-b', 'Bold', () => exec('bold'), 'Bold (⌘B)'),
       btn('text-italic', 'Italic', () => exec('italic'), 'Italic (⌘I)'),
@@ -1448,6 +1475,9 @@
       const items = [];
       items.push({ icon: 'text-h-one', label: 'Heading 1', sub: 'Large section header', action: () => document.execCommand('formatBlock', false, 'H1') });
       items.push({ icon: 'text-h-two', label: 'Heading 2', sub: 'Subsection', action: () => document.execCommand('formatBlock', false, 'H2') });
+      items.push({ icon: 'text-h-three', label: 'Heading 3', sub: 'Sub-subsection', action: () => document.execCommand('formatBlock', false, 'H3') });
+      items.push({ icon: 'text-h-four', label: 'Heading 4', sub: 'Minor heading', action: () => document.execCommand('formatBlock', false, 'H4') });
+      items.push({ icon: 'paragraph', label: 'Paragraph', sub: 'Reset to body text', action: () => document.execCommand('formatBlock', false, 'P') });
       items.push({ icon: 'quotes', label: 'Blockquote', sub: 'Pull quote', action: () => document.execCommand('formatBlock', false, 'BLOCKQUOTE') });
       items.push({ icon: 'code', label: 'Code block', sub: 'Monospaced', action: () => document.execCommand('formatBlock', false, 'PRE') });
       items.push({ icon: 'minus', label: 'Horizontal rule', sub: 'Section break', action: () => document.execCommand('insertHorizontalRule') });

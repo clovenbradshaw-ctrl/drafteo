@@ -698,3 +698,20 @@
   padding: 40px 22px;
   text-align: center;
 }
+
+/* Floating progress toast for srcindex bulk re-ingest */
+.srcindex-toast {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 9999;
+  background: var(--chrome);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 14px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+  min-width: 320px;
+  max-width: 480px;
+  font-family: var(--sans);
+  font-size: 12px;
+}

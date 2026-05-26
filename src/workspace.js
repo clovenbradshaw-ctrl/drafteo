@@ -27,6 +27,7 @@
     tabs.open = (tabs.open || []).filter(id => {
       if (id === '__corkboard__') return true;
       if (id === '__sources_index__') return true;
+      if (id === '__exhibits_index__') return true;
       if (typeof id === 'string' && id.indexOf('__src__:') === 0) {
         const parsed = parseSourceTabKey(id);
         return !!(parsed && Store.getSource(parsed.doc_id, parsed.source_id));
@@ -85,7 +86,7 @@
       // Search button
       const searchBtn = el('button.ws-search', { onClick: () => window.SearchSources.open(ws_id, app) },
         icon('magnifying-glass'),
-        el('span', 'Search sources…'),
+        el('span', 'Search exhibits…'),
         el('span.kbd', '⌘K'),
       );
       sidebar.appendChild(searchBtn);
@@ -98,13 +99,23 @@
       );
       sidebar.appendChild(corkBtn);
 
-      // Source URLs button — opens a flat list of every source's name + canonical URL
-      const allSourcesCount = Store.listDocuments(ws_id)
+      // Exhibits button — workspace-wide list of ingested URLs/documents,
+      // click-and-confirm to open. Distinct from "Sources" (the URL index).
+      const allExhibitsCount = Store.listDocuments(ws_id)
         .reduce((n, d) => n + Store.listSources(d.id).length, 0);
+      const exhIndexBtn = el('button.ws-search', { style: { borderTop: 0 }, onClick: () => openExhibitsIndex() },
+        icon('files'),
+        el('span', 'Exhibits'),
+        el('span.kbd', String(allExhibitsCount || '')),
+      );
+      sidebar.appendChild(exhIndexBtn);
+
+      // Sources button — flat URL list (was "Source URLs"; a "source" is
+      // just the URL behind an exhibit per the workspace vocabulary).
       const srcIndexBtn = el('button.ws-search', { style: { borderTop: 0 }, onClick: () => openSourcesIndex() },
         icon('link-simple'),
-        el('span', 'Source URLs'),
-        el('span.kbd', String(allSourcesCount || '')),
+        el('span', 'Sources'),
+        el('span.kbd', String(allExhibitsCount || '')),
       );
       sidebar.appendChild(srcIndexBtn);
 
@@ -133,11 +144,11 @@
       draftsSection.appendChild(draftList);
       sidebar.appendChild(draftsSection);
 
-      // Exhibits section — saved spans of evidence
+      // Cited text section — saved verbatim spans (was "exhibits").
       const exhibitsSection = el('div.ws-section');
       const exhibits = Store.listExhibits(ws_id);
       exhibitsSection.appendChild(el('div.ws-section-head',
-        el('span', icon('scissors'), ' EXHIBITS'),
+        el('span', icon('scissors'), ' CITED TEXT'),
         el('span', { style: { fontSize: '10px', color: 'var(--ink-faint)' } }, exhibits.length ? String(exhibits.length) : ''),
       ));
       const exhibitsList = el('div.ws-tree');
@@ -161,16 +172,16 @@
         exhibitsList.appendChild(row);
       }
       if (exhibits.length === 0) {
-        exhibitsList.appendChild(el('div.ws-tree-empty', 'Select text in a source or draft and "Save as exhibit" to clip evidence here.'));
+        exhibitsList.appendChild(el('div.ws-tree-empty', 'Select text in an exhibit or draft and "Save as cited text" to clip evidence here.'));
       }
       exhibitsSection.appendChild(exhibitsList);
       sidebar.appendChild(exhibitsSection);
 
-      // Sources section (across all docs in this workspace)
+      // Exhibits section (ingested URLs/docs across all drafts in this workspace).
       const sourcesSection = el('div.ws-section');
       sourcesSection.appendChild(el('div.ws-section-head',
-        el('span', icon('paperclip'), ' SOURCES'),
-        el('button.iconbtn.ghost', { title: 'Add a source to the active draft', onClick: () => addSourceToActive() }, icon('plus')),
+        el('span', icon('paperclip'), ' EXHIBITS'),
+        el('button.iconbtn.ghost', { title: 'Add an exhibit to the active draft', onClick: () => addSourceToActive() }, icon('plus')),
       ));
       const sourceList = el('div.ws-tree');
       const allSources = [];
@@ -191,7 +202,7 @@
         ));
       }
       if (allSources.length === 0) {
-        sourceList.appendChild(el('div.ws-tree-empty', 'No sources yet. Upload or import in the active draft\'s right panel.'));
+        sourceList.appendChild(el('div.ws-tree-empty', 'No exhibits yet. Upload or import in the active draft\'s right panel.'));
       }
       sourcesSection.appendChild(sourceList);
       sidebar.appendChild(sourcesSection);
@@ -339,7 +350,7 @@
       descTa.value = s.description || '';
       const tagsInp = el('input', { type: 'text', value: (s.tags || []).join(', '), placeholder: 'metro, OHS, audit' });
       const modal = el('div.modal', { onClick: (e) => e.stopPropagation() },
-        el('div.m-head', el('div', el('div.ttl', 'Edit source'), el('div.sub', s.filename)), el('button.ghost', { onClick: () => scrim.remove() }, '✕')),
+        el('div.m-head', el('div', el('div.ttl', 'Edit exhibit'), el('div.sub', s.filename)), el('button.ghost', { onClick: () => scrim.remove() }, '✕')),
         el('div.m-body',
           el('label', 'Title'), titleInp,
           el('label', 'Description'), descTa,
@@ -474,7 +485,7 @@
 
       const targetDoc = Store.getDocument(target_doc_id);
       const modal = el('div.modal', { style: { width: 'min(560px, 96vw)' }, onClick: (e) => e.stopPropagation() },
-        el('div.m-head', el('div', el('div.ttl', 'Add source'), el('div.sub', 'Attaching to: ' + (targetDoc && targetDoc.title || 'a draft'))), el('button.ghost', { onClick: () => scrim.remove() }, '✕')),
+        el('div.m-head', el('div', el('div.ttl', 'Add exhibit'), el('div.sub', 'Attaching to: ' + (targetDoc && targetDoc.title || 'a draft'))), el('button.ghost', { onClick: () => scrim.remove() }, '✕')),
         el('div.m-body', tabs, dropzone, fileProgress, urlBox),
       );
       scrim.appendChild(modal);
@@ -489,7 +500,9 @@
         if (id === '__corkboard__') {
           label = 'Corkboard'; ic = 'squares-four';
         } else if (id === '__sources_index__') {
-          label = 'Source URLs'; ic = 'link-simple';
+          label = 'Sources'; ic = 'link-simple';
+        } else if (id === '__exhibits_index__') {
+          label = 'Exhibits'; ic = 'files';
         } else if (typeof id === 'string' && id.indexOf('__src__:') === 0) {
           const parsed = parseSourceTabKey(id);
           if (!parsed) continue;
@@ -561,7 +574,7 @@
         el('div', { onClick: () => { closeMenu(); openDoc(d.id); } }, icon('eye'), ' Open'),
         el('div', { onClick: () => { closeMenu(); renameDraft(d); } }, icon('pencil-simple'), ' Rename'),
         el('div', { onClick: () => { closeMenu(); duplicateDraft(d); } }, icon('copy'), ' Duplicate'),
-        el('div', { onClick: () => { closeMenu(); makeSourceFromDraft(d); } }, icon('paperclip'), ' Make a source from this draft'),
+        el('div', { onClick: () => { closeMenu(); makeSourceFromDraft(d); } }, icon('paperclip'), ' Make an exhibit from this draft'),
         el('div', { style: { height: '1px', background: 'var(--border)', margin: '4px 0' } }),
         el('div', { onClick: async () => { closeMenu(); const ok = await DOM.confirmDialog({ title: 'Delete draft?', body: 'Delete "' + d.title + '"? Cannot be undone.', confirmLabel: 'Delete', cancelLabel: 'Cancel', danger: true }); if (ok) { await Store.deleteDocument(d.id); closeTab(d.id); } }, style: { color: 'var(--err)' } }, icon('trash'), ' Delete'),
       );
@@ -570,7 +583,7 @@
       setTimeout(() => document.addEventListener('click', closeMenu, { once: true }), 0);
     }
 
-    // Snapshot the current state of a draft and stash it as a citable source
+    // Snapshot the current state of a draft and stash it as a citable exhibit
     // (an .html snapshot) in another doc the user picks.
     async function makeSourceFromDraft(d) {
       const all = Store.listDocuments(ws_id).filter(x => x.id !== d.id);
@@ -593,7 +606,7 @@
         }
       }
       const modal = el('div.modal', { onClick: e => e.stopPropagation() },
-        el('div.m-head', el('div', el('div.ttl', 'Make "' + d.title + '" a source'), el('div.sub', 'Snapshot this draft (v' + d.version + ') and attach it as a source on another draft')), el('button.ghost', { onClick: () => scrim.remove() }, '✕')),
+        el('div.m-head', el('div', el('div.ttl', 'Make "' + d.title + '" an exhibit'), el('div.sub', 'Snapshot this draft (v' + d.version + ') and attach it as an exhibit on another draft')), el('button.ghost', { onClick: () => scrim.remove() }, '✕')),
         el('div.m-body', list),
       );
       scrim.appendChild(modal);
@@ -612,7 +625,7 @@
         source_draft_id: srcDoc.id,
         source_draft_version: srcDoc.version,
       });
-      DOM.toast('SOURCE CREATED', 'Snapshot of "' + srcDoc.title + '" attached.', 4500);
+      DOM.toast('EXHIBIT CREATED', 'Snapshot of "' + srcDoc.title + '" attached.', 4500);
       // Switch to that target doc to show the new source
       openDoc(target_doc_id);
     }
@@ -657,6 +670,15 @@
       renderContent();
       renderSidebar();
     }
+
+    function openExhibitsIndex() {
+      tabs.active = '__exhibits_index__';
+      if (!tabs.open.includes('__exhibits_index__')) tabs.open.push('__exhibits_index__');
+      saveTabs();
+      renderTabs();
+      renderContent();
+      renderSidebar();
+    }
     // Let other views (like SourcesIndex) reuse the source-tab opener.
     window.__openSourceTab = (doc_id, source_id) => openSource(doc_id, source_id);
 
@@ -679,6 +701,10 @@
       }
       if (tabs.active === '__sources_index__') {
         content.appendChild(window.SourcesIndex.open(ws_id, app));
+        return;
+      }
+      if (tabs.active === '__exhibits_index__') {
+        content.appendChild(window.ExhibitsIndex.open(ws_id, app));
         return;
       }
       if (typeof tabs.active === 'string' && tabs.active.indexOf('__src__:') === 0) {

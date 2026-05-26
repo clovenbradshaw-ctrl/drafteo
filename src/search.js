@@ -13,7 +13,7 @@
 
     const input = el('input', {
       type: 'text',
-      placeholder: 'Search all sources in this workspace…',
+      placeholder: 'Search all exhibits in this workspace…',
       autocomplete: 'off',
       spellcheck: 'false',
     });
@@ -24,7 +24,7 @@
       clear(list);
       const results = Store.searchSourcesInWorkspace(ws_id, q);
       if (results.length === 0) {
-        list.appendChild(el('div.search-empty', q ? 'No sources match "' + q + '".' : 'No sources in this workspace yet.'));
+        list.appendChild(el('div.search-empty', q ? 'No exhibits match "' + q + '".' : 'No exhibits in this workspace yet.'));
         selectedIdx = -1;
         return;
       }

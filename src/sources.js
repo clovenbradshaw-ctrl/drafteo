@@ -9,7 +9,7 @@
 
     const panel = el('div.sourcepanel',
       el('div.head',
-        el('h3', 'Sources'),
+        el('h3', 'Exhibits'),
         el('div', { style: { display: 'flex', gap: '6px' } },
           el('button.ghost', { onClick: () => archiveAll(doc_id, ed) }, 'PRESERVE ALL'),
         ),
@@ -29,17 +29,17 @@
       const hidden = Store.listHiddenSources(doc_id);
       if (sources.length === 0 && hidden.length === 0) {
         list.appendChild(el('div', { style: { padding: '30px 14px', textAlign: 'center', color: 'var(--ink-faint)', fontFamily: 'var(--sans)', fontStyle: 'italic', fontSize: '13px', border: '1px dashed var(--border)', margin: '8px 0' } },
-          'No sources yet. Drop files here or click UPLOAD.'));
+          'No exhibits yet. Drop files here or click UPLOAD.'));
       } else {
         for (const s of sources) list.appendChild(card(s, doc_id, ed));
         if (hidden.length > 0) {
           const archDetails = el('details', { open: true, style: { marginTop: '14px', borderTop: '1px solid var(--border)', paddingTop: '10px' } },
             el('summary', { style: { cursor: 'pointer', fontFamily: 'var(--sans)', fontSize: '12px', fontWeight: '600', color: 'var(--ink-dim)', padding: '6px 0', listStyle: 'none', display: 'flex', alignItems: 'center', gap: '6px' } },
               icon('trash', 12),
-              'Bin · ' + hidden.length + ' tossed source' + (hidden.length === 1 ? '' : 's'),
+              'Bin · ' + hidden.length + ' tossed exhibit' + (hidden.length === 1 ? '' : 's'),
             ),
             el('div', { style: { fontFamily: 'var(--sans)', fontSize: '11px', color: 'var(--ink-faint)', margin: '0 0 8px', lineHeight: '1.5' } },
-              'Tossed sources stay here until you restore or delete forever. Archived-to-archive.org items can never be truly deleted.',
+              'Tossed exhibits stay here until you restore or delete forever. Archived-to-archive.org items can never be truly deleted.',
             ),
             el('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
               ...hidden.map(s => card(s, doc_id, ed, { hiddenSection: true })),
@@ -172,17 +172,32 @@
   }
 
   // Returns the list of URLs that failed (so caller can leave them in the input).
+  // Dedupes against URLs already attached as exhibits on this draft —
+  // re-pasting a list with overlap won't double-ingest.
   async function bulkImportUrls(doc_id, urls, progressNode, onChange) {
     clear(progressNode);
     progressNode.style.display = 'block';
+    const norm = (u) => String(u || '').replace(/#.*$/, '').replace(/\/+$/, '').toLowerCase();
+    const attached = new Set((Store.listSources(doc_id) || [])
+      .map(s => s.source_url).filter(Boolean).map(norm));
+    const seenInBatch = new Set();
     const rows = urls.map((u) => {
       const r = makeProgressRow(u);
+      const key = norm(u);
+      const dup = attached.has(key) || seenInBatch.has(key);
+      seenInBatch.add(key);
       progressNode.appendChild(r.row);
-      return { url: u, ...r };
+      return { url: u, key, dup, ...r };
     });
     const failed = [];
     let ok = 0;
+    let skipped = 0;
     for (const item of rows) {
+      if (item.dup) {
+        item.setState('ok', 'skipped · already an exhibit');
+        skipped++;
+        continue;
+      }
       item.setState('working', 'fetching…');
       try {
         const meta = await Store.importFromUrl(doc_id, item.url);
@@ -195,9 +210,10 @@
         failed.push(item.url);
       }
     }
-    DOM.toast(failed.length ? 'IMPORT FINISHED' : 'IMPORTED',
-      ok + ' of ' + rows.length + ' snapshot(s) saved' + (failed.length ? ' · ' + failed.length + ' failed' : ''),
-      4500);
+    const parts = [ok + ' saved'];
+    if (skipped) parts.push(skipped + ' skipped (dup)');
+    if (failed.length) parts.push(failed.length + ' failed');
+    DOM.toast(failed.length ? 'IMPORT FINISHED' : 'IMPORTED', parts.join(' · '), 4500);
     return failed;
   }
 
