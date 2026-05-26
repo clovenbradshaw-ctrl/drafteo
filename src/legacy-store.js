@@ -1141,7 +1141,15 @@ export const Store = {
   // ── Misc ──
 
   async wipeAll() {
-    // Clears local sessions. Server-side rooms remain.
+    // Full local-data reset. Server-side rooms remain.
+    //
+    // This is the user-facing "I'm stuck on CONNECTING…, get me out"
+    // escape hatch (also wired into the login screen). It must wipe
+    // every browser store the SDK or shim could be reading on the
+    // next boot: localStorage + sessionStorage, every IndexedDB
+    // database (not just the rust-crypto store), every Cache Storage
+    // entry, and any registered service worker. Anything less and we
+    // re-enter the same hang on reload.
     for (const s of workspaceSessions.values()) { try { await s.close(); } catch {} }
     for (const s of documentSessions.values()) { try { await s.close(); } catch {} }
     workspaceSessions.clear();
@@ -1149,6 +1157,28 @@ export const Store = {
     try { await fLogout(); } catch {}
     currentSession = null;
     try { localStorage.clear(); } catch {}
+    try { sessionStorage.clear(); } catch {}
+    try {
+      if (indexedDB.databases) {
+        const dbs = await indexedDB.databases();
+        await Promise.all((dbs || []).map((db) => db?.name ? new Promise((resolve) => {
+          const req = indexedDB.deleteDatabase(db.name);
+          req.onsuccess = req.onerror = req.onblocked = () => resolve();
+        }) : Promise.resolve()));
+      }
+    } catch {}
+    try {
+      if (window.caches) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((k) => caches.delete(k)));
+      }
+    } catch {}
+    try {
+      if (navigator.serviceWorker) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map((r) => r.unregister()));
+      }
+    } catch {}
     location.reload();
   },
 
