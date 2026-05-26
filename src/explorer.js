@@ -219,6 +219,11 @@
     let hitMarks = [];          // <mark> elements in middle pane
     let activeHit = 0;
     let captured = null;        // { text, charStart, charEnd, before, after }
+    let mediaActive = false;    // middle pane is showing PDF/image/audio/video
+    let sortMode = 'title';     // 'title' | 'status' | 'draft'
+    let groupMode = false;      // group rows by status (archived / web / local)
+    let listLimit = 80;         // incremental render cap; "Show all" expands
+    let exhibitCounts = null;   // source_id -> int, lazily computed per workspace
 
     // ── Elements ──
     const queryInput = el('input.expl-search-inp', {
@@ -231,6 +236,33 @@
 
     const listEl = el('div.expl-list');
     const listSummary = el('div.expl-list-sum');
+
+    const sortSel = el('select.expl-sort-sel', { title: 'Sort sources' },
+      el('option', { value: 'title' }, 'Title'),
+      el('option', { value: 'status' }, 'Status'),
+      el('option', { value: 'draft' }, 'Draft'),
+    );
+    sortSel.value = sortMode;
+    sortSel.addEventListener('change', () => {
+      sortMode = sortSel.value;
+      listLimit = 80;
+      renderList();
+    });
+    const groupBtn = el('button.expl-group-btn', {
+      type: 'button',
+      title: 'Group sources by status',
+      onClick: () => {
+        groupMode = !groupMode;
+        groupBtn.classList.toggle('active', groupMode);
+        listLimit = 80;
+        renderList();
+      },
+    }, icon('squares-four', 12), ' Group');
+    const sortBar = el('div.expl-sort-bar',
+      el('label.expl-sort-lbl', 'Sort'),
+      sortSel,
+      groupBtn,
+    );
 
     const findInput = el('input.expl-find-inp', {
       type: 'text',
@@ -257,47 +289,164 @@
 
     const rightPane = el('div.expl-right');
 
+    // ── List helpers: status bucket, sort, exhibits-per-source ──
+    function statusOf(s) {
+      if (s.archive_org_url) return 'archived';
+      if (s.source_url) return 'web';
+      return 'local';
+    }
+    const STATUS_RANK = { archived: 0, web: 1, local: 2 };
+    const STATUS_LABEL = { archived: 'Archived', web: 'Web sources', local: 'Local files' };
+    const STATUS_ICON = { archived: 'check-circle', web: 'globe', local: 'file' };
+
+    function compareRecs(a, b) {
+      if (sortMode === 'status') {
+        const d = STATUS_RANK[statusOf(a.source)] - STATUS_RANK[statusOf(b.source)];
+        if (d !== 0) return d;
+      } else if (sortMode === 'draft') {
+        const d = (a.doc.title || '').localeCompare(b.doc.title || '');
+        if (d !== 0) return d;
+      }
+      const ta = (a.source.title || a.source.filename || '').toLowerCase();
+      const tb = (b.source.title || b.source.filename || '').toLowerCase();
+      return ta.localeCompare(tb);
+    }
+
+    function getExhibitCount(source_id) {
+      if (!exhibitCounts) {
+        exhibitCounts = {};
+        const all = Store.listExhibits(ws_id) || [];
+        for (const ex of all) {
+          if (!ex.source_id) continue;
+          exhibitCounts[ex.source_id] = (exhibitCounts[ex.source_id] || 0) + 1;
+        }
+      }
+      return exhibitCounts[source_id] || 0;
+    }
+
+    function buildRow(r) {
+      const s = r.source;
+      const isWeb = !!s.source_url;
+      const isActive = activeRec && activeRec.source_id === r.source_id;
+      const cited = getExhibitCount(r.source_id);
+      const status = statusOf(s);
+      const statusPill = status === 'archived'
+        ? el('span.expl-pill.ok', icon('check-circle', 10), ' archived')
+        : status === 'web'
+          ? el('span.expl-pill.warn', icon('globe', 10), ' web')
+          : el('span.expl-pill.mute', icon('file', 10), ' local');
+      const openBtn = el('span.expl-row-open', {
+        title: 'Open this source in a full tab',
+        onClick: (e) => { e.stopPropagation(); openInTab(r); },
+      }, icon('arrow-square-out', 12));
+      return el('button.expl-row' + (isActive ? '.active' : ''),
+        { type: 'button', onClick: () => selectRec(r) },
+        el('div.expl-row-ico' + (isWeb ? '.web' : ''),
+          isWeb ? icon('globe') : el('span', DOM.fileExt(s.mime, s.filename))),
+        el('div.expl-row-body',
+          el('div.expl-row-ttl-line',
+            el('div.expl-row-ttl', s.title || s.filename || 'Untitled source'),
+            openBtn,
+          ),
+          el('div.expl-row-meta',
+            statusPill,
+            el('span.expl-row-dot', '·'),
+            el('span.expl-row-doc', r.doc.title || 'Untitled draft'),
+            cited > 0 ? el('span.expl-row-dot', '·') : null,
+            cited > 0 ? el('span.expl-pill.cited', icon('quotes', 10), ' ' + cited + ' cited') : null,
+          ),
+          s.description ? el('div.expl-row-desc', s.description) : null,
+        ),
+      );
+    }
+
     // ── Build list ──
     function renderList() {
       clear(listEl);
-      if (visibleRecs.length === 0) {
-        listEl.appendChild(el('div.expl-list-empty',
-          allRecs.length === 0 ? 'No sources in this workspace yet.' : 'No sources match.',
-        ));
-        listSummary.textContent = allRecs.length === 0 ? '0 sources' : '0 of ' + allRecs.length + ' shown';
+      const total = allRecs.length;
+      const shown = visibleRecs.length;
+
+      if (shown === 0) {
+        if (total === 0) {
+          listEl.appendChild(el('div.expl-list-empty',
+            icon('books', 22),
+            el('div.expl-list-empty-ttl', 'No sources yet'),
+            el('div.expl-list-empty-sub', 'Add files or URLs from a draft\'s Sources panel, then come back here to browse and cite.'),
+          ));
+        } else {
+          listEl.appendChild(el('div.expl-list-empty',
+            icon('magnifying-glass', 22),
+            el('div.expl-list-empty-ttl', 'No sources match'),
+            el('div.expl-list-empty-sub', 'Try a shorter query, or clear the filter.'),
+            el('button.expl-chip', { onClick: () => { queryInput.value = ''; queryInput.dispatchEvent(new Event('input')); } },
+              ' Clear filter'),
+          ));
+        }
+        listSummary.textContent = total === 0 ? '0 sources' : '0 of ' + total + ' shown';
         return;
       }
-      listSummary.textContent = visibleRecs.length === allRecs.length
-        ? visibleRecs.length + ' source' + (visibleRecs.length === 1 ? '' : 's')
-        : visibleRecs.length + ' of ' + allRecs.length + ' shown';
-      for (const r of visibleRecs) {
-        const s = r.source;
-        const isWeb = !!s.source_url;
-        const isActive = activeRec && activeRec.source_id === r.source_id;
-        const row = el('button.expl-row' + (isActive ? '.active' : ''),
-          { type: 'button', onClick: () => selectRec(r) },
-          el('div.expl-row-ico' + (isWeb ? '.web' : ''),
-            isWeb ? icon('globe') : el('span', DOM.fileExt(s.mime, s.filename))),
-          el('div.expl-row-body',
-            el('div.expl-row-ttl', s.title || s.filename || 'Untitled source'),
-            el('div.expl-row-meta',
-              s.archive_org_url ? el('span.expl-pill.ok', icon('check-circle', 10), ' archived')
-                : (s.source_url ? el('span.expl-pill.warn', icon('globe', 10), ' web')
-                  : el('span.expl-pill.mute', icon('file', 10), ' local')),
-              el('span.expl-row-dot', '·'),
-              el('span.expl-row-doc', r.doc.title || 'Untitled draft'),
-            ),
-            s.description ? el('div.expl-row-desc', s.description) : null,
-          ),
-        );
-        listEl.appendChild(row);
+
+      listSummary.textContent = shown === total
+        ? shown + ' source' + (shown === 1 ? '' : 's')
+        : shown + ' of ' + total + ' shown';
+
+      const sorted = visibleRecs.slice().sort(compareRecs);
+
+      if (groupMode) {
+        const groups = { archived: [], web: [], local: [] };
+        for (const r of sorted) groups[statusOf(r.source)].push(r);
+        let rendered = 0;
+        for (const key of ['archived', 'web', 'local']) {
+          const recs = groups[key];
+          if (recs.length === 0) continue;
+          listEl.appendChild(el('div.expl-group-head',
+            icon(STATUS_ICON[key], 10),
+            el('span', STATUS_LABEL[key]),
+            el('span.expl-group-count', recs.length),
+          ));
+          for (const r of recs) {
+            if (rendered >= listLimit) break;
+            listEl.appendChild(buildRow(r));
+            rendered++;
+          }
+          if (rendered >= listLimit) break;
+        }
+        if (sorted.length > listLimit) appendMoreSentinel(sorted.length);
+      } else {
+        const slice = sorted.slice(0, listLimit);
+        for (const r of slice) listEl.appendChild(buildRow(r));
+        if (sorted.length > listLimit) appendMoreSentinel(sorted.length);
       }
+    }
+
+    function appendMoreSentinel(total) {
+      const remaining = total - listLimit;
+      const btn = el('button.expl-list-more', {
+        type: 'button',
+        onClick: () => { listLimit = Infinity; renderList(); },
+      }, 'Show ' + remaining + ' more');
+      listEl.appendChild(btn);
+      // Auto-expand if the user scrolls to the sentinel — cheap virtualization
+      try {
+        const obs = new IntersectionObserver((entries) => {
+          for (const e of entries) {
+            if (e.isIntersecting) {
+              obs.disconnect();
+              listLimit = Infinity;
+              renderList();
+              return;
+            }
+          }
+        }, { root: listEl, rootMargin: '200px' });
+        obs.observe(btn);
+      } catch (_) {}
     }
 
     // ── Build middle pane for active source ──
     async function renderMiddle() {
       clear(middleHead);
       clear(middleBody);
+      mediaActive = false;
       if (!activeRec) {
         middleBody.appendChild(middleEmpty.cloneNode(true));
         findInput.value = '';
@@ -336,37 +485,72 @@
       // Body — pick renderer by mime
       const mime = s.mime || '';
       const isPdf = mime === 'application/pdf';
-      const isMedia = mime.startsWith('image/') || mime.startsWith('audio/') || mime.startsWith('video/');
+      const isImage = mime.startsWith('image/');
+      const isAudio = mime.startsWith('audio/');
+      const isVideo = mime.startsWith('video/');
+      const isMedia = isPdf || isImage || isAudio || isVideo;
 
-      if (isPdf) {
-        middleBody.appendChild(el('div.expl-pdf-note',
-          icon('file-pdf'),
-          el('div.expl-pdf-ttl', 'PDF — paste the passage to cite'),
-          el('div.expl-pdf-sub', 'The browser\'s native PDF viewer doesn\'t share selections with the app. Use the button below to paste the passage you want to cite.'),
-          el('button.expl-chip.expl-chip-primary', {
-            onClick: () => openPdfPaste(activeRec),
-          }, icon('scissors', 12), ' Paste & cite PDF passage'),
-          el('a.expl-chip', { href: url, target: '_blank', rel: 'noopener', style: url ? null : { display: 'none' } },
-            icon('arrow-square-out', 12), ' Open PDF in new tab'),
-        ));
-        captured = null;
-        renderRight();
-        return;
-      }
       if (isMedia) {
-        middleBody.appendChild(el('div.expl-pdf-note',
-          icon(mime.startsWith('image/') ? 'image' : mime.startsWith('audio/') ? 'speaker-high' : 'video'),
-          el('div.expl-pdf-ttl', 'No inline text to grab'),
-          el('div.expl-pdf-sub', 'This source is binary media. Open it in a full tab to view, or cite it as a whole-source reference.'),
-          el('button.expl-chip.expl-chip-primary', {
-            onClick: () => openInTab(activeRec),
-          }, icon('arrow-square-out', 12), ' Open in tab'),
-        ));
+        mediaActive = true;
         captured = null;
+        const archiveDl = (s.archive_org_identifier && (s.archive_org_filename || s.filename))
+          ? 'https://archive.org/download/' + s.archive_org_identifier + '/' + encodeURIComponent(s.archive_org_filename || s.filename)
+          : null;
+
+        // Toolbar above the preview — primary cite action and external link
+        const toolbar = el('div.expl-media-bar',
+          el('div.expl-media-bar-lbl',
+            icon(isPdf ? 'file-pdf' : isImage ? 'image' : isAudio ? 'speaker-high' : 'video', 12),
+            el('span', isPdf ? 'PDF preview · select text below or paste a passage'
+              : isImage ? 'Image · cite as whole-source reference'
+              : isAudio ? 'Audio · cite a timestamp or whole source'
+              : 'Video · cite a timestamp or whole source'),
+          ),
+          el('div.expl-media-bar-actions',
+            isPdf ? el('button.expl-chip.expl-chip-primary', {
+              onClick: () => openPdfPaste(activeRec),
+            }, icon('scissors', 12), ' Paste & cite passage') : null,
+            url ? el('a.expl-chip', { href: url, target: '_blank', rel: 'noopener' },
+              icon('arrow-square-out', 12), ' Open original') : null,
+          ),
+        );
+        middleBody.appendChild(toolbar);
+
+        // Loading shim while we resolve the blob URL
+        const stage = el('div.expl-media-stage', el('div.expl-empty-inline', 'Loading preview…'));
+        middleBody.appendChild(stage);
+
+        const reqRec = activeRec;
+        (async () => {
+          let blobUrl = null;
+          try { blobUrl = await Store.fetchMedia(s); } catch (_) {}
+          if (reqRec !== activeRec) return;
+          const src = blobUrl || archiveDl || url || null;
+          clear(stage);
+          if (!src) {
+            stage.appendChild(el('div.expl-empty-inline',
+              'No local copy available. Use the buttons above to open the original.'));
+            return;
+          }
+          if (isImage) {
+            stage.appendChild(el('div.expl-media-img-wrap',
+              el('img.expl-media-img', { src, alt: s.title || s.filename || 'image' })));
+          } else if (isAudio) {
+            stage.appendChild(el('div.expl-media-player-wrap',
+              el('audio.expl-media-player', { src, controls: 'controls' })));
+          } else if (isVideo) {
+            stage.appendChild(el('div.expl-media-player-wrap',
+              el('video.expl-media-player', { src, controls: 'controls' })));
+          } else { // PDF
+            stage.appendChild(el('iframe.expl-media-frame', { src, title: s.title || s.filename || 'PDF' }));
+          }
+        })();
+
         renderRight();
         return;
       }
 
+      mediaActive = false;
       // Text-y body
       const textHost = el('div.expl-text');
       middleBody.appendChild(el('div.expl-text-scroll', textHost));
@@ -434,21 +618,72 @@
     // ── Build right pane ──
     function renderRight() {
       clear(rightPane);
-      rightPane.appendChild(el('div.expl-right-head',
-        el('div.expl-right-ttl', 'Selection'),
-        el('div.expl-right-sub', captured ? 'Pick an action to cite this span.' : 'Highlight text in the middle pane to grab a span.'),
-      ));
 
-      if (!captured) {
-        rightPane.appendChild(el('div.expl-right-empty',
-          icon('cursor-text'),
-          el('div', { style: { marginTop: '8px', fontFamily: 'var(--sans)', fontSize: '12px', color: 'var(--ink-faint)' } },
-            'No selection yet.'),
+      // No source picked yet
+      if (!activeRec) {
+        rightPane.appendChild(el('div.expl-right-head',
+          el('div.expl-right-ttl', opts.onPick ? 'Pick a passage' : 'Cite from a source'),
+          el('div.expl-right-sub', 'Choose a source on the left to begin.'),
         ));
-        // Existing exhibits tied to this source
+        rightPane.appendChild(el('div.expl-right-empty',
+          icon('arrow-left', 22),
+          el('div.expl-right-empty-ttl', 'Nothing open yet'),
+          el('div.expl-right-empty-sub', 'Pick a source from the list, then highlight text to grab a span.'),
+        ));
+        return;
+      }
+
+      // No live selection — coach based on source type
+      if (!captured) {
+        rightPane.appendChild(el('div.expl-right-head',
+          el('div.expl-right-ttl', opts.onPick ? 'Pick a passage' : 'Cite from this source'),
+          el('div.expl-right-sub', mediaActive
+            ? (activeRec.source.mime === 'application/pdf'
+                ? 'Select text inline, or paste a passage to cite.'
+                : 'Cite the whole source, or open in a tab for full controls.')
+            : 'Highlight text in the middle pane to grab a span.'),
+        ));
+
+        if (mediaActive) {
+          const s = activeRec.source;
+          const isPdf = s.mime === 'application/pdf';
+          // Primary action varies by media kind
+          rightPane.appendChild(el('div.expl-actions',
+            isPdf ? el('button.expl-act.expl-act-primary', {
+              onClick: () => openPdfPaste(activeRec),
+              title: 'Paste a passage you copied from the PDF',
+            }, icon('scissors', 12), ' Paste & cite passage') : el('button.expl-act.expl-act-primary', {
+              onClick: () => doCiteWhole(),
+              title: 'Cite this entire source — no selection',
+            }, icon('bookmark-simple', 12), ' Cite whole source'),
+            el('button.expl-act.expl-act-ghost', {
+              onClick: () => openInTab(activeRec),
+              title: 'Open this source in a full tab',
+            }, icon('arrow-square-out', 12), ' Open in tab'),
+          ));
+        } else {
+          rightPane.appendChild(el('div.expl-right-empty',
+            icon('cursor-text', 22),
+            el('div.expl-right-empty-ttl', 'How to cite'),
+            el('ol.expl-right-steps',
+              el('li', 'Find a passage in the middle pane (use the find bar above)'),
+              el('li', 'Highlight the text you want to cite'),
+              el('li', 'Pick an action below — save, copy, or stage'),
+            ),
+          ));
+        }
+
         renderTiedExhibits();
         return;
       }
+
+      // Live selection — show quote + actions with clear hierarchy
+      rightPane.appendChild(el('div.expl-right-head',
+        el('div.expl-right-ttl', opts.onPick ? 'Selected passage' : 'Selection'),
+        el('div.expl-right-sub', opts.onPick
+          ? 'Confirm to insert into your draft.'
+          : 'Pick an action to cite this span.'),
+      ));
 
       const c = captured;
       rightPane.appendChild(el('div.expl-quote',
@@ -459,51 +694,104 @@
 
       const pageInp = el('input.expl-page', {
         type: 'text',
-        placeholder: 'Page or location (optional) — e.g. p. 12',
+        placeholder: 'p. 12  ·  § 4  ·  ¶ "Beginning July 1…"',
       });
 
-      rightPane.appendChild(el('label.expl-right-lbl', 'Page / location'));
+      rightPane.appendChild(el('label.expl-right-lbl', 'Page / location ', el('span.expl-right-lbl-opt', '(optional)')));
       rightPane.appendChild(pageInp);
 
-      const actions = el('div.expl-actions',
-        el('button.expl-act', {
-          onClick: () => doSave({ copy: false, stage: false, page: pageInp.value.trim() }),
-          title: 'Save as cited text — provenance & archive URL captured immutably',
-        }, icon('scissors', 12), ' Save as exhibit'),
-        el('button.expl-act', {
-          onClick: () => doSave({ copy: true, stage: false, page: pageInp.value.trim() }),
-          title: 'Save AND copy a formatted citation to the clipboard',
-        }, icon('copy', 12), ' Save + copy citation'),
-        el('button.expl-act', {
-          onClick: () => doStage({ page: pageInp.value.trim() }),
-          title: 'Stash for the next time you cite in an editor',
-        }, icon('arrow-square-out', 12), ' Stage for editor'),
-        el('button.expl-act.expl-act-ghost', {
-          onClick: () => doCopyQuote(),
-          title: 'Copy just the highlighted text',
-        }, icon('quotes', 12), ' Copy quote only'),
-      );
-      rightPane.appendChild(actions);
-
       if (opts.onPick) {
-        rightPane.appendChild(el('button.expl-act.expl-act-primary', {
-          onClick: () => {
-            opts.onPick({
-              text: c.text,
-              source: activeRec.source,
-              doc_id: activeRec.doc_id,
-              source_id: activeRec.source_id,
-              char_start: c.charStart,
-              char_end: c.charEnd,
-              context_before: c.before,
-              context_after: c.after,
-            });
-            close();
-          },
-        }, icon('check', 12), ' Use this passage'));
+        // Picker mode — primary CTA is "Use this passage", save/copy are secondary
+        rightPane.appendChild(el('div.expl-actions',
+          el('button.expl-act.expl-act-primary', {
+            onClick: () => {
+              opts.onPick({
+                text: c.text,
+                source: activeRec.source,
+                doc_id: activeRec.doc_id,
+                source_id: activeRec.source_id,
+                char_start: c.charStart,
+                char_end: c.charEnd,
+                context_before: c.before,
+                context_after: c.after,
+              });
+              close();
+            },
+            title: 'Insert this passage into your draft',
+          }, icon('check', 12), ' Use this passage'),
+        ));
+        rightPane.appendChild(el('div.expl-actions-sec',
+          el('button.expl-act-text', {
+            onClick: () => doSave({ copy: false, page: pageInp.value.trim() }),
+            title: 'Also save as a permanent exhibit',
+          }, icon('scissors', 10), ' Save as exhibit'),
+          el('button.expl-act-text', {
+            onClick: () => doCopyQuote(),
+            title: 'Copy just the highlighted text',
+          }, icon('quotes', 10), ' Copy quote'),
+        ));
+      } else {
+        // Standard mode — primary "Save", secondary "Save + copy", tertiary copy/stage
+        rightPane.appendChild(el('div.expl-actions',
+          el('button.expl-act.expl-act-primary', {
+            onClick: () => doSave({ copy: false, page: pageInp.value.trim() }),
+            title: 'Save as cited text — provenance & archive URL captured immutably',
+          }, icon('scissors', 12), ' Save as exhibit'),
+          el('button.expl-act', {
+            onClick: () => doSave({ copy: true, page: pageInp.value.trim() }),
+            title: 'Save AND copy a formatted citation to the clipboard',
+          }, icon('copy', 12), ' Save + copy citation'),
+        ));
+        rightPane.appendChild(el('div.expl-actions-sec',
+          el('button.expl-act-text', {
+            onClick: () => doStage({ page: pageInp.value.trim() }),
+            title: 'Stash for the next time you cite in an editor',
+          }, icon('arrow-square-out', 10), ' Stage for editor'),
+          el('button.expl-act-text', {
+            onClick: () => doCopyQuote(),
+            title: 'Copy just the highlighted text',
+          }, icon('quotes', 10), ' Copy quote only'),
+        ));
       }
 
       renderTiedExhibits();
+    }
+
+    async function doCiteWhole() {
+      if (!activeRec) return;
+      const s = activeRec.source;
+      try {
+        await Store.createExhibit(ws_id, {
+          text: '[Whole source: ' + (s.title || s.filename || 'Untitled') + ']',
+          label: '',
+          note: '',
+          tags: [],
+          source_id: activeRec.source_id,
+          doc_id: activeRec.doc_id,
+          char_start: null,
+          char_end: null,
+          context_before: '',
+          context_after: '',
+          provenance: {
+            source_title: s.title || s.filename,
+            filename: s.filename,
+            mime: s.mime,
+            source_url: s.source_url || null,
+            archive_org_url: s.archive_org_url || null,
+            archive_org_identifier: s.archive_org_identifier || null,
+            archive_org_filename: s.archive_org_filename || s.filename || null,
+            captured_at: new Date().toISOString(),
+            whole_source: true,
+          },
+        });
+        DOM.toast('CITED WHOLE SOURCE', s.title || s.filename || 'Source', 2800);
+        exhibitCounts = null; // invalidate cache
+        if (window.__refreshSidebar) window.__refreshSidebar();
+        renderList();
+        renderRight();
+      } catch (e) {
+        DOM.toast('SAVE FAILED', e.message || String(e), 3500);
+      }
     }
 
     function renderTiedExhibits() {
@@ -560,6 +848,8 @@
           DOM.toast('CITED TEXT SAVED', '"' + c.text.slice(0, 60) + '"', 3000);
         }
         if (window.__refreshSidebar) window.__refreshSidebar();
+        exhibitCounts = null; // invalidate cache so list badge increments
+        renderList();
         renderTiedExhibits();
       } catch (e) {
         DOM.toast('SAVE FAILED', e.message || String(e), 3500);
@@ -614,6 +904,7 @@
     // ── Wire events ──
     queryInput.addEventListener('input', () => {
       visibleRecs = filterRecs(allRecs, queryInput.value);
+      listLimit = 80;
       renderList();
       // If active source is no longer in the visible set, keep it open
       // but reflect filtered state; user can clear query.
@@ -639,6 +930,7 @@
       allRecs.length = 0;
       for (const r of fresh) allRecs.push(r);
       visibleRecs = filterRecs(allRecs, queryInput.value);
+      exhibitCounts = null;
       // Refresh activeRec source object if it still exists
       if (activeRec) {
         const found = allRecs.find(r => r.source_id === activeRec.source_id);
@@ -661,6 +953,7 @@
         // Left pane
         el('div.expl-left',
           el('div.expl-left-search', icon('magnifying-glass', 12), queryInput),
+          sortBar,
           listSummary,
           listEl,
         ),
