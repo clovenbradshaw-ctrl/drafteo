@@ -137,6 +137,15 @@
           ),
         ),
         el('div.srcv-actions',
+          (s.mime === 'application/pdf') ? el('button.srcv-btn.preserve', {
+            title: 'Copy a passage from the PDF, then click to paste-and-cite',
+            onClick: () => openPdfPassageDialog({
+              ws_id: window.__currentWs,
+              source: s,
+              source_id,
+              doc_id,
+            }),
+          }, icon('scissors'), el('span', 'Cite passage')) : null,
           viewUrl ? el('a.srcv-btn', { href: viewUrl, target: '_blank', rel: 'noopener' }, icon('arrow-square-out'), el('span', 'Open')) : null,
           viewUrl ? el('a.srcv-btn', { href: viewUrl, download: s.filename }, icon('download-simple'), el('span', 'Download')) : null,
           s.source_url ? el('a.srcv-btn', { href: s.source_url, target: '_blank', rel: 'noopener' }, icon('link'), el('span', 'Original')) : null,
@@ -326,7 +335,6 @@
       if (mime === 'application/pdf') {
         const src = inlineUrl;
         if (!src) { body.appendChild(el('div.srcv-empty', 'No PDF source available.')); return; }
-        body.appendChild(buildPdfCiteBar(s));
         body.appendChild(el('iframe.srcv-iframe', { src }));
         return;
       }
@@ -520,33 +528,6 @@
       // Clear bar after launching dialog so it doesn't sit there blocking.
       bar.style.display = 'none';
     }
-  }
-
-  // Slim toolbar shown above the PDF iframe. The browser's native PDF
-  // viewer doesn't expose selections to JS, so this is the entry point
-  // for citing prose out of a PDF. The user copies from the PDF, then
-  // clicks "Cite passage" and pastes into the dialog.
-  function buildPdfCiteBar(source) {
-    const ctx = window.__sourceContext || {};
-    const bar = el('div.srcv-pdfcitebar',
-      el('div.srcv-pdfcitebar-msg',
-        icon('quotes', 12),
-        el('span', 'Select text in the PDF, copy it (⌘C / Ctrl-C), then click '),
-        el('strong', 'Cite passage'),
-        el('span', ' to save it as cited text with full provenance.'),
-      ),
-      el('div.srcv-pdfcitebar-actions',
-        el('button.srcv-btn.preserve', {
-          onClick: () => openPdfPassageDialog({
-            ws_id: window.__currentWs,
-            source,
-            source_id: ctx.source_id || null,
-            doc_id: ctx.doc_id || null,
-          }),
-        }, icon('scissors', 13), el('span', ' Cite passage')),
-      ),
-    );
-    return bar;
   }
 
   // Modal: paste-the-passage flow for PDFs (and anywhere a live DOM
