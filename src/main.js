@@ -36,6 +36,7 @@ import './editor.js';
 import './corkboard.js';
 import './sourcesindex.js';
 import './exhibitsindex.js';
+import './pdfrender.js';
 import './explorer.js';
 import './search.js';
 import './exporter.js';

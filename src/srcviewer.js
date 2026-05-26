@@ -132,8 +132,9 @@
               isWeb ? el('span.srcv-host', new URL(s.source_url).hostname) : null,
               !isWeb && s.filename ? el('span.srcv-dot') : null,
               !isWeb && s.filename ? el('span.srcv-fname', s.filename) : null,
+              el('span.srcv-dot'),
+              status,
             ),
-            el('div.srcv-status-row', status),
           ),
         ),
         el('div.srcv-actions',
@@ -162,21 +163,6 @@
       // Live progress bar while archiving
       if (archiving) {
         head.appendChild(buildProgressBar(archiving));
-      }
-
-      // Archived URL row — make it copyable & visible
-      if (archived) {
-        head.appendChild(el('div.srcv-archive-row',
-          el('span.srcv-archive-label', 'archive.org URL'),
-          el('a.srcv-archive-url', { href: s.archive_org_url, target: '_blank', rel: 'noopener' }, s.archive_org_url),
-          el('button.srcv-copy', {
-            title: 'Copy URL',
-            onClick: (e) => {
-              e.preventDefault();
-              navigator.clipboard.writeText(s.archive_org_url).then(() => DOM.toast('COPIED', s.archive_org_url));
-            }
-          }, icon('copy', 12)),
-        ));
       }
 
       return head;
@@ -352,16 +338,27 @@
         body.appendChild(el('div.srcv-media-wrap', el('video', { src: inlineUrl, controls: 'controls' })));
         return;
       }
-      // PDFs: browsers render natively from blob URLs in iframes
-      // (Brave shields can block — fall back to archive.org URL if archived).
-      // The native PDF viewer is a browser plugin, so we can't attach
-      // selectionchange/contextmenu inside it. Surface a manual "Cite a
-      // passage" affordance above the iframe — the user copies text from
-      // the PDF, then pastes it into the dialog with a page number.
+      // PDFs: render with pdf.js so we own the text layer — highlights
+      // inside the PDF give real DOM selections, which the quote toolbar
+      // attaches to just like any text source. If pdf.js fails to load
+      // (worker error, blocked, etc) fall back to the native iframe and
+      // the paste-and-cite dialog in the header.
       if (mime === 'application/pdf') {
         const src = inlineUrl;
         if (!src) { body.appendChild(el('div.srcv-empty', 'No PDF source available.')); return; }
-        body.appendChild(el('iframe.srcv-iframe', { src }));
+        if (window.PdfRender && window.PdfRender.render) {
+          const pdfHost = el('div.srcv-pdf-host');
+          body.appendChild(pdfHost);
+          window.PdfRender.render(pdfHost, src).then(() => {
+            attachQuoteToolbar(pdfHost);
+          }).catch((e) => {
+            console.warn('[srcviewer] PdfRender failed, falling back to iframe', e);
+            pdfHost.remove();
+            body.appendChild(el('iframe.srcv-iframe', { src }));
+          });
+        } else {
+          body.appendChild(el('iframe.srcv-iframe', { src }));
+        }
         return;
       }
 
