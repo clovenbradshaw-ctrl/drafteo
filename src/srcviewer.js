@@ -582,6 +582,7 @@
           source_url: source.source_url || null,
           archive_org_url: source.archive_org_url || null,
           archive_org_identifier: source.archive_org_identifier || null,
+          archive_org_filename: source.archive_org_filename || source.filename || null,
           captured_at: new Date().toISOString(),
         } : null,
       });
