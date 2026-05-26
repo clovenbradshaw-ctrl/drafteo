@@ -618,6 +618,178 @@ export const Store = {
   },
 
   /**
+   * Append a redaction to a source. Each redaction is a region the user
+   * wants destroyed from the local copy before archiving:
+   *
+   *   { type: 'text',     start, end, label }    // char offsets in plaintext
+   *   { type: 'rect',     x, y, w, h, label }    // relative 0..1 image coords
+   *   { type: 'pdf-rect', page, x, y, w, h, label } // PDF page coords (overlay only in v1)
+   *
+   * Pending redactions are display-only — `applyRedactions` is what actually
+   * rewrites the bytes. We block adding redactions to an already-archived
+   * source because the public archive.org copy is permanent: redaction has
+   * to happen before archiving to mean anything.
+   */
+  async addRedaction(doc_id, source_id, redaction) {
+    const s = Store.getSource(doc_id, source_id);
+    if (!s) throw new Error('source not found');
+    if (s.archive_org_url) {
+      throw new Error('This source is already on archive.org. The public copy is permanent — redact before archiving.');
+    }
+    if (!redaction || !redaction.type) throw new Error('redaction.type required');
+    const id = 'red_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+    const next = (Array.isArray(s.redactions) ? s.redactions.slice() : []).concat([{
+      ...redaction,
+      id,
+      label: (redaction.label || '').toString().trim(),
+      created_at: Date.now(),
+      created_by: (currentSession && currentSession.matrix_id) || null,
+    }]);
+    await def(doc_id, source_id, 'redactions', next);
+    try {
+      window.dispatchEvent(new CustomEvent('drafteo:sources-updated', { detail: { doc_id, source_id } }));
+    } catch (_) {}
+    return Store.getSource(doc_id, source_id);
+  },
+
+  async removeRedaction(doc_id, source_id, redaction_id) {
+    const s = Store.getSource(doc_id, source_id);
+    if (!s) throw new Error('source not found');
+    const next = (s.redactions || []).filter((r) => r.id !== redaction_id);
+    await def(doc_id, source_id, 'redactions', next);
+    try {
+      window.dispatchEvent(new CustomEvent('drafteo:sources-updated', { detail: { doc_id, source_id } }));
+    } catch (_) {}
+    return Store.getSource(doc_id, source_id);
+  },
+
+  /**
+   * Destructively apply pending redactions. Rewrites the source's bytes,
+   * re-encrypts, uploads as a new mxc, and DEFs the new descriptor. Also
+   * cascades to any exhibit that quotes a now-redacted span — the exhibit's
+   * text / context fields get replaced with [REDACTED] markers and the
+   * `redaction_warning` flag is set so the viewer surfaces it.
+   *
+   * Throws when the source is already archived, when there's nothing to
+   * apply, or when the mime is unsupported (PDFs currently keep their
+   * overlay-only metadata since we can't rewrite PDF bytes without a
+   * dedicated lib).
+   */
+  async applyRedactions(doc_id, source_id, opts) {
+    const s = Store.getSource(doc_id, source_id);
+    if (!s) throw new Error('source not found');
+    if (s.archive_org_url) {
+      throw new Error('Cannot redact destructively — this source is already on archive.org.');
+    }
+    const all = Array.isArray(s.redactions) ? s.redactions : [];
+    if (all.length === 0) throw new Error('No redactions to apply.');
+    const onProgress = typeof opts?.onProgress === 'function' ? opts.onProgress : () => {};
+    const client = getClient();
+    if (!client) throw new Error('Not connected');
+    if (!s.mxc_uri) throw new Error('Source has no preserved binary to rewrite.');
+
+    const mime = s.mime || '';
+    const isHtml = mime === 'text/html' || mime === 'application/xhtml+xml';
+    const isPlainText = mime.startsWith('text/') || mime === 'application/json';
+    const isImage = mime.startsWith('image/');
+    const isPdf = mime === 'application/pdf';
+
+    if (isPdf) {
+      throw new Error('Destructive PDF redaction is not yet supported. Your overlay redactions are saved and will display in the viewer.');
+    }
+
+    const textReds = all.filter((r) => r.type === 'text');
+    const rectReds = all.filter((r) => r.type === 'rect');
+
+    if (isHtml || isPlainText) {
+      if (textReds.length === 0) throw new Error('No text redactions to apply on a text source.');
+    } else if (isImage) {
+      if (rectReds.length === 0) throw new Error('No image redactions to apply on an image source.');
+    } else {
+      throw new Error('Destructive redaction is not supported for ' + mime + '.');
+    }
+
+    // ── 1. Pull and decrypt the current bytes ───────────────────────────
+    onProgress({ stage: 'reading', label: 'Reading original bytes…' });
+    const cipherBuf = await fetchMxcCiphertext(client, s.mxc_uri);
+    if (!cipherBuf) throw new Error('Could not fetch original bytes.');
+    let plainBuf = cipherBuf;
+    if (s.encryption_info) {
+      plainBuf = await decryptAttachment(cipherBuf, s.encryption_info);
+    }
+
+    let newBytes = null;
+    let newPlaintext = s.plaintext || null;
+
+    // ── 2. Rewrite according to mime ────────────────────────────────────
+    if (isHtml) {
+      onProgress({ stage: 'rewriting', label: 'Rewriting HTML…' });
+      const html = new TextDecoder().decode(plainBuf);
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+      // Strip volatile nodes so the text-walker matches what the viewer shows.
+      doc.querySelectorAll('script, style, noscript').forEach((n) => n.remove());
+      applyTextRedactionsToTextNodes(doc.body || doc.documentElement, textReds);
+      const out = '<!doctype html>' + doc.documentElement.outerHTML;
+      newBytes = new TextEncoder().encode(out).buffer;
+      newPlaintext = applyTextRedactionsToString(s.plaintext || '', textReds);
+    } else if (isPlainText) {
+      onProgress({ stage: 'rewriting', label: 'Rewriting text…' });
+      const text = new TextDecoder().decode(plainBuf);
+      const out = applyTextRedactionsToString(text, textReds);
+      newBytes = new TextEncoder().encode(out).buffer;
+      newPlaintext = out;
+    } else if (isImage) {
+      onProgress({ stage: 'rendering', label: 'Burning redactions into image…' });
+      const blob = new Blob([plainBuf], { type: mime });
+      const url = URL.createObjectURL(blob);
+      try {
+        const redactedBlob = await renderImageWithRectRedactions(url, rectReds, mime);
+        newBytes = await redactedBlob.arrayBuffer();
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    }
+
+    if (!newBytes) throw new Error('Internal: no bytes produced.');
+
+    // ── 3. Re-encrypt and re-upload ─────────────────────────────────────
+    onProgress({ stage: 'uploading', label: 'Uploading redacted bytes…' });
+    const { data: ciphertext, info } = await encryptAttachment(newBytes);
+    const cblob = new Blob([ciphertext], { type: 'application/octet-stream' });
+    const resp = await client.uploadContent(cblob, {
+      name: s.filename,
+      type: 'application/octet-stream',
+    });
+    const mxc = typeof resp === 'string' ? resp : (resp.content_uri || resp);
+
+    // ── 4. DEF the new descriptor ───────────────────────────────────────
+    onProgress({ stage: 'finalising', label: 'Updating source…' });
+    await def(doc_id, source_id, 'mxc_uri', mxc);
+    await def(doc_id, source_id, 'encryption_info', info);
+    await def(doc_id, source_id, 'size_bytes', newBytes.byteLength);
+    if (newPlaintext != null) {
+      await def(doc_id, source_id, 'plaintext', String(newPlaintext).slice(0, 200000));
+    }
+    // Carry pdf-rect overlay forward; clear everything we just baked in.
+    const carry = all.filter((r) => r.type === 'pdf-rect');
+    await def(doc_id, source_id, 'redactions', carry);
+    await def(doc_id, source_id, 'redactions_applied_at', Date.now());
+
+    // ── 5. Cascade text redactions to exhibits ──────────────────────────
+    if (textReds.length > 0) {
+      try { await cascadeTextRedactionsToExhibits(source_id, textReds); }
+      catch (e) { console.warn('[redact] exhibit cascade failed', e); }
+    }
+
+    try {
+      window.dispatchEvent(new CustomEvent('drafteo:sources-updated', { detail: { doc_id, source_id } }));
+    } catch (_) {}
+    onProgress({ stage: 'done', label: 'Redactions applied' });
+    return Store.getSource(doc_id, source_id);
+  },
+
+  /**
    * Archive flow — uploads to the n8n archiveo webhook, which PUTs to
    * archive.org and returns the resulting identifier + URL. onProgress is
    * called with { stage, pct, sent, total, label } as the upload and
@@ -628,6 +800,9 @@ export const Store = {
   async archiveSource(doc_id, source_id, onProgress) {
     const s = Store.getSource(doc_id, source_id);
     if (!s) throw new Error('source not found');
+    if (Array.isArray(s.redactions) && s.redactions.length > 0) {
+      throw new Error('This source has ' + s.redactions.length + ' pending redaction(s). Apply or remove them before archiving — archive.org is permanent.');
+    }
     if (!s.mxc_uri) {
       throw new Error('Source has no preserved binary to archive.');
     }
@@ -1319,6 +1494,8 @@ function sourceCard(e) {
     hidden: !!e.hidden,
     plaintext: e.plaintext || null,
     snapshot_at: e.snapshot_at || null,
+    redactions: Array.isArray(e.redactions) ? e.redactions : [],
+    redactions_applied_at: e.redactions_applied_at || null,
   };
 }
 
@@ -1338,7 +1515,191 @@ function exhibitCard(e) {
     provenance: e.provenance || null,
     author: e.author || e._sender || null,
     created_at: e.created_at || e._created || Date.now(),
+    redaction_warning: !!e.redaction_warning,
   };
+}
+
+// ── Redaction helpers ──
+
+// Find the [start, end) char range of `text` inside `haystack`, using
+// context_before/context_after to disambiguate when the same text
+// appears multiple times. Whitespace is normalised so casual paste
+// drift doesn't sink the lookup. Returns null when no match.
+function locateTextRedaction(haystack, text, ctxBefore, ctxAfter) {
+  if (!haystack || !text) return null;
+  const norm = (s) => (s || '').replace(/\s+/g, ' ');
+  const flat = norm(haystack);
+  const target = norm(text);
+  if (!target) return null;
+
+  // Build a flat→haystack index map so we can return real offsets.
+  const flatToHay = [];
+  {
+    let j = 0;
+    for (let i = 0; i < haystack.length; i++) {
+      const isWs = /\s/.test(haystack[i]);
+      if (isWs && j > 0 && flat[j - 1] === ' ') continue;
+      flatToHay[j++] = i;
+    }
+    flatToHay[j] = haystack.length;
+  }
+
+  const before = norm(ctxBefore || '').slice(-40);
+  const after  = norm(ctxAfter  || '').slice(0, 40);
+  const candidates = [];
+  if (before && after) candidates.push(before + target + after);
+  if (before) candidates.push(before + target);
+  if (after)  candidates.push(target + after);
+  candidates.push(target);
+
+  for (const cand of candidates) {
+    const idx = flat.indexOf(cand);
+    if (idx < 0) continue;
+    const targetIdxInFlat = flat.indexOf(target, idx);
+    if (targetIdxInFlat < 0 || targetIdxInFlat >= idx + cand.length) continue;
+    const start = flatToHay[targetIdxInFlat];
+    const end   = flatToHay[targetIdxInFlat + target.length];
+    if (Number.isFinite(start) && Number.isFinite(end) && end > start) return [start, end];
+  }
+  return null;
+}
+
+// Replace each redacted region (located by content) in the string with
+// a block of FULL BLOCK characters (█) of the same visual length.
+function applyTextRedactionsToString(text, reds) {
+  if (!text || !reds || reds.length === 0) return text;
+  const ranges = [];
+  for (const r of reds) {
+    if (r.type !== 'text') continue;
+    const range = locateTextRedaction(text, r.text, r.context_before, r.context_after);
+    if (range) ranges.push(range);
+  }
+  if (ranges.length === 0) return text;
+  ranges.sort((a, b) => a[0] - b[0]);
+  let out = '';
+  let cursor = 0;
+  for (const [s, e] of ranges) {
+    if (s < cursor) continue;
+    if (s > cursor) out += text.slice(cursor, s);
+    if (e > s) out += '█'.repeat(e - s);
+    cursor = e;
+  }
+  if (cursor < text.length) out += text.slice(cursor);
+  return out;
+}
+
+// Walk text nodes in `root`, locate each redaction by content (with
+// context-aware matching), and replace the matched chars in-place with
+// FULL BLOCK characters. Text nodes are mutated, surrounding HTML
+// structure is preserved.
+function applyTextRedactionsToTextNodes(root, reds) {
+  if (!root || !reds || reds.length === 0) return;
+  const doc = root.ownerDocument || document;
+
+  // Build flat text + (node, start) index from text nodes.
+  function buildIndex() {
+    const segs = [];
+    let full = '';
+    const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    let node;
+    while ((node = walker.nextNode())) {
+      const v = node.nodeValue || '';
+      segs.push({ node, start: full.length, end: full.length + v.length });
+      full += v;
+    }
+    return { full, segs };
+  }
+
+  for (const r of reds) {
+    if (r.type !== 'text') continue;
+    const { full, segs } = buildIndex();
+    const range = locateTextRedaction(full, r.text, r.context_before, r.context_after);
+    if (!range) continue;
+    const [matchStart, matchEnd] = range;
+
+    // Mutate the text nodes covering [matchStart, matchEnd).
+    for (const seg of segs) {
+      if (seg.end <= matchStart || seg.start >= matchEnd) continue;
+      const localS = Math.max(0, matchStart - seg.start);
+      const localE = Math.min(seg.node.nodeValue.length, matchEnd - seg.start);
+      if (localE > localS) {
+        const v = seg.node.nodeValue;
+        seg.node.nodeValue = v.slice(0, localS) + '█'.repeat(localE - localS) + v.slice(localE);
+      }
+    }
+  }
+}
+
+// Render an image to a canvas, burn opaque black rectangles where the
+// redactions sit (coordinates are 0..1 relative to the natural image
+// size), then export as a blob. We export as PNG for lossless masking;
+// the original format is forgotten in favour of "the redaction is
+// guaranteed opaque".
+async function renderImageWithRectRedactions(blobUrl, rects, _mime) {
+  const img = await new Promise((resolve, reject) => {
+    const i = new Image();
+    i.crossOrigin = 'anonymous';
+    i.onload = () => resolve(i);
+    i.onerror = () => reject(new Error('Image failed to load for redaction.'));
+    i.src = blobUrl;
+  });
+  const canvas = document.createElement('canvas');
+  canvas.width = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  ctx.fillStyle = '#000';
+  for (const r of rects) {
+    const x = Math.round(Math.max(0, Math.min(1, r.x)) * canvas.width);
+    const y = Math.round(Math.max(0, Math.min(1, r.y)) * canvas.height);
+    const w = Math.round(Math.max(0, Math.min(1, r.w)) * canvas.width);
+    const h = Math.round(Math.max(0, Math.min(1, r.h)) * canvas.height);
+    if (w > 0 && h > 0) ctx.fillRect(x, y, w, h);
+  }
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((b) => b ? resolve(b) : reject(new Error('Could not export redacted image.')), 'image/png');
+  });
+}
+
+// Walk every open workspace's exhibits. For exhibits that cite the
+// source and quote (or context-quote) any redacted text, replace the
+// overlapping characters with █████ and flag `redaction_warning` so the
+// detail modal can surface it. Matching is content-based — we search
+// inside the exhibit's own (context_before + text + context_after)
+// blob, so it works regardless of the offset spaces the redactions
+// were captured in.
+async function cascadeTextRedactionsToExhibits(source_id, textReds) {
+  if (!source_id || !textReds || textReds.length === 0) return;
+  const reds = textReds.filter((r) => r.type === 'text' && r.text);
+  if (reds.length === 0) return;
+
+  for (const [ws_id, session] of workspaceSessions.entries()) {
+    if (!session || !session.state) continue;
+    const exhibits = entitiesOfType(session.state, ENTITY.EXHIBIT) || [];
+    for (const ex of exhibits) {
+      if (ex.deleted) continue;
+      if (ex.source_id !== source_id) continue;
+
+      const ctxB = (ex.context_before || '').length;
+      const exTextLen = (ex.text || '').length;
+      const fullText = (ex.context_before || '') + (ex.text || '') + (ex.context_after || '');
+      const masked = applyTextRedactionsToString(fullText, reds);
+      if (masked === fullText) continue;
+
+      const newContextBefore = masked.slice(0, ctxB);
+      const newText          = masked.slice(ctxB, ctxB + exTextLen);
+      const newContextAfter  = masked.slice(ctxB + exTextLen);
+
+      try {
+        await def(ws_id, ex._anchor, 'text', newText);
+        await def(ws_id, ex._anchor, 'context_before', newContextBefore);
+        await def(ws_id, ex._anchor, 'context_after', newContextAfter);
+        await def(ws_id, ex._anchor, 'redaction_warning', true);
+      } catch (e) {
+        console.warn('[redact] failed to update exhibit', ex._anchor, e);
+      }
+    }
+  }
 }
 
 // ── Source-snapshot helpers ──

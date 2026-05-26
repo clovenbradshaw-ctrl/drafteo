@@ -274,6 +274,16 @@
       const modal = el('div.modal', { style: { width: 'min(560px, 96vw)' }, onClick: (e) => e.stopPropagation() },
         el('div.m-head', el('div', el('div.ttl', 'Exhibit'), el('div.sub', 'Permanent provenance · ' + DOM.fmtTimeAgo(ex.created_at) + (ex.author ? ' · by ' + ex.author : ''))), el('button.ghost', { onClick: () => scrim.remove() }, '✕')),
         el('div.m-body',
+          ex.redaction_warning
+            ? el('div', {
+                style: {
+                  fontFamily: 'var(--sans)', fontSize: '12px', color: 'var(--err)',
+                  background: 'color-mix(in srgb, var(--err) 8%, transparent)',
+                  border: '1px dashed var(--err)', borderRadius: '4px',
+                  padding: '10px 12px', marginBottom: '14px', lineHeight: '1.5',
+                },
+              }, '⚠ Part of this exhibit was destructively redacted at the source. The quote below shows the redacted text — the original characters are gone.')
+            : null,
           el('label', 'Quote'),
           el('div', { style: { fontFamily: 'var(--sans)', fontStyle: 'italic', fontSize: '14px', color: 'var(--ink-dim)', borderLeft: '3px solid var(--accent)', paddingLeft: '12px', margin: '4px 0 14px', lineHeight: '1.6', whiteSpace: 'pre-wrap' } }, '"' + ex.text + '"'),
           el('label', 'Label (optional)'),
