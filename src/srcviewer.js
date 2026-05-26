@@ -170,7 +170,89 @@
         ));
       }
 
+      const reds = Array.isArray(s.redactions) ? s.redactions : [];
+      if (reds.length > 0 || s.redactions_applied_at) {
+        head.appendChild(buildRedactionsPanel(s, reds));
+      }
+
       return head;
+    }
+
+    function buildRedactionsPanel(s, reds) {
+      const archived = !!s.archive_org_url;
+      const pendingCount = reds.length;
+      const wrap = el('div.srcv-redactions' + (pendingCount > 0 ? ' has-pending' : ''));
+      const head = el('div.srcv-red-head',
+        el('div.srcv-red-title',
+          icon('eye-slash', 12),
+          el('strong', pendingCount > 0
+            ? pendingCount + ' pending redaction' + (pendingCount === 1 ? '' : 's')
+            : 'Redactions applied'),
+          s.redactions_applied_at
+            ? el('span.srcv-red-applied', 'last applied ' + DOM.fmtTimeAgo(s.redactions_applied_at))
+            : null,
+        ),
+        pendingCount > 0 && !archived
+          ? el('button.srcv-red-apply', {
+              onClick: () => doApplyRedactions(s),
+              title: 'Rewrite the source bytes and cascade [REDACTED] into every citing exhibit',
+            }, icon('warning', 12), el('span', 'APPLY DESTRUCTIVELY'))
+          : null,
+      );
+      wrap.appendChild(head);
+
+      if (archived && pendingCount > 0) {
+        wrap.appendChild(el('div.srcv-red-warn',
+          'This source is already on archive.org. The public copy is permanent — pending redactions can\'t be applied.'));
+      }
+
+      if (pendingCount > 0) {
+        const list = el('div.srcv-red-list');
+        for (const r of reds) {
+          const meta = r.type === 'text' ? ((r.text || '').length + ' chars')
+                    : r.type === 'rect' ? (Math.round((r.w || 0) * 100) + '% × ' + Math.round((r.h || 0) * 100) + '%')
+                    : r.type === 'pdf-rect' ? ('PDF page ' + (r.page || '?')) : r.type;
+          list.appendChild(el('div.srcv-red-row',
+            el('span.srcv-red-type', r.type === 'text' ? 'TEXT' : r.type === 'rect' ? 'IMAGE' : 'PDF'),
+            el('span.srcv-red-label', r.label || (r.text ? r.text.slice(0, 60) : meta)),
+            el('span.srcv-red-range', meta),
+            el('button.srcv-red-remove', {
+              title: 'Remove this pending redaction',
+              onClick: async () => {
+                try { await Store.removeRedaction(doc_id, source_id, r.id); }
+                catch (e) { DOM.toast('REMOVE FAILED', e.message || String(e)); }
+              },
+            }, icon('x', 12)),
+          ));
+        }
+        wrap.appendChild(list);
+      }
+
+      return wrap;
+    }
+
+    async function doApplyRedactions(s) {
+      const ok = await DOM.confirmDialog({
+        title: 'Apply redactions destructively?',
+        body: 'Rewrites the source bytes (re-uploaded as a fresh mxc) and replaces matching text in every exhibit that quotes this source with [REDACTED]. This cannot be undone.',
+        confirmLabel: 'Apply destructively',
+        cancelLabel: 'Cancel',
+        danger: true,
+      });
+      if (!ok) return;
+      const progressNode = el('div.srcv-red-progress', 'Working…');
+      headerSlot.appendChild(progressNode);
+      try {
+        await Store.applyRedactions(doc_id, source_id, {
+          onProgress: (p) => { progressNode.textContent = p.label || p.stage || 'Working…'; },
+        });
+        DOM.toast('REDACTED', 'Bytes rewritten · exhibits updated · safe to archive', 5000);
+        render();
+      } catch (e) {
+        DOM.toast('REDACTION FAILED', e.message || String(e), 7000);
+        progressNode.textContent = 'Failed: ' + (e.message || String(e));
+        progressNode.classList.add('srcv-red-progress-fail');
+      }
     }
 
     function buildProgressBar(state) {
@@ -236,7 +318,10 @@
             const ifr = el('iframe.srcv-iframe', { src, sandbox: 'allow-same-origin' });
             slot.appendChild(ifr);
             ifr.addEventListener('load', () => {
-              try { attachQuoteToolbar(ifr.contentDocument.body, ifr.contentDocument); } catch (_) {}
+              try {
+                attachQuoteToolbar(ifr.contentDocument.body, ifr.contentDocument);
+                paintPendingTextRedactions(ifr.contentDocument.body, ifr.contentDocument);
+              } catch (_) {}
             });
           } else {
             const renderPre = (txt) => {
@@ -245,6 +330,7 @@
               const pre = el('pre.srcv-text.' + (which === 'readable' ? 'dechrome' : 'fullchrome'), out);
               slot.appendChild(pre);
               attachQuoteToolbar(pre);
+              paintPendingTextRedactions(pre);
             };
             if (cachedText) {
               renderPre(cachedText);
@@ -306,7 +392,10 @@
       const inlineUrl = viewUrl || archiveDl;
 
       if (mime.startsWith('image/')) {
-        body.appendChild(el('div.srcv-image-wrap', el('img', { src: inlineUrl, alt: s.title || s.filename })));
+        const img = el('img', { src: inlineUrl, alt: s.title || s.filename });
+        const wrap = el('div.srcv-image-wrap', img);
+        body.appendChild(wrap);
+        img.addEventListener('load', () => { try { attachImageRedactor(wrap, img); } catch (_) {} });
         return;
       }
       if (mime.startsWith('audio/')) {
@@ -373,6 +462,215 @@
     return host;
   }
 
+  // Paint pending text redactions in the live DOM as visible black-box
+  // spans so the user can see exactly what will be destroyed. The spans
+  // are visual overlays — the underlying text nodes stay intact, so
+  // selection/save-as-exhibit/copy still see the original text.
+  // Matching is content-based (text + surrounding context), so the same
+  // redactions paint correctly in the formatted iframe, readable view,
+  // and raw view.
+  function paintPendingTextRedactions(textHost, scopeDoc) {
+    const meta = window.__sourceContext || {};
+    if (!meta.source_id || !meta.doc_id || !textHost) return;
+    const s = Store.getSource(meta.doc_id, meta.source_id);
+    const reds = s && Array.isArray(s.redactions) ? s.redactions.filter(r => r.type === 'text' && r.text) : [];
+    if (reds.length === 0) return;
+    const doc = scopeDoc || textHost.ownerDocument || document;
+
+    // Clear any previous marks (re-paint is idempotent).
+    try {
+      textHost.querySelectorAll('.srcv-redact-mark').forEach((n) => {
+        const t = doc.createTextNode(n.textContent);
+        n.parentNode.replaceChild(t, n);
+      });
+      textHost.normalize();
+    } catch (_) {}
+
+    for (const r of reds) {
+      try { paintOneRedaction(textHost, doc, r); } catch (e) {
+        console.warn('[srcviewer] paint redaction failed', e);
+      }
+    }
+  }
+
+  function paintOneRedaction(textHost, doc, r) {
+    // Build a fresh index per redaction so painting earlier ones doesn't
+    // throw later ones off.
+    const segs = [];
+    let full = '';
+    const walker = doc.createTreeWalker(textHost, NodeFilter.SHOW_TEXT, null);
+    let n;
+    while ((n = walker.nextNode())) {
+      if (n.parentNode && n.parentNode.classList && n.parentNode.classList.contains('srcv-redact-mark')) {
+        full += n.nodeValue || '';
+        segs.push({ node: n, start: full.length - (n.nodeValue || '').length, end: full.length, skip: true });
+        continue;
+      }
+      const v = n.nodeValue || '';
+      segs.push({ node: n, start: full.length, end: full.length + v.length, skip: false });
+      full += v;
+    }
+
+    const range = locateText(full, r.text, r.context_before, r.context_after);
+    if (!range) return;
+    const [mStart, mEnd] = range;
+
+    for (const seg of segs) {
+      if (seg.skip) continue;
+      if (seg.end <= mStart || seg.start >= mEnd) continue;
+      const localS = Math.max(0, mStart - seg.start);
+      const localE = Math.min(seg.node.nodeValue.length, mEnd - seg.start);
+      if (localE <= localS) continue;
+      const v = seg.node.nodeValue;
+      const parent = seg.node.parentNode;
+      if (!parent) continue;
+      const frag = doc.createDocumentFragment();
+      if (localS > 0) frag.appendChild(doc.createTextNode(v.slice(0, localS)));
+      const mark = doc.createElement('span');
+      mark.className = 'srcv-redact-mark';
+      mark.textContent = v.slice(localS, localE);
+      mark.title = 'Pending redaction · "' + (r.label || r.text).slice(0, 60) + '"';
+      frag.appendChild(mark);
+      if (localE < v.length) frag.appendChild(doc.createTextNode(v.slice(localE)));
+      parent.replaceChild(frag, seg.node);
+    }
+  }
+
+  // Same content-aware matching as legacy-store, mirrored here so we
+  // don't add a cross-module import for one small function.
+  function locateText(haystack, text, ctxBefore, ctxAfter) {
+    if (!haystack || !text) return null;
+    const norm = (s) => (s || '').replace(/\s+/g, ' ');
+    const flat = norm(haystack);
+    const target = norm(text);
+    if (!target) return null;
+    const flatToHay = [];
+    {
+      let j = 0;
+      for (let i = 0; i < haystack.length; i++) {
+        const isWs = /\s/.test(haystack[i]);
+        if (isWs && j > 0 && flat[j - 1] === ' ') continue;
+        flatToHay[j++] = i;
+      }
+      flatToHay[j] = haystack.length;
+    }
+    const before = norm(ctxBefore || '').slice(-40);
+    const after  = norm(ctxAfter  || '').slice(0, 40);
+    const candidates = [];
+    if (before && after) candidates.push(before + target + after);
+    if (before) candidates.push(before + target);
+    if (after)  candidates.push(target + after);
+    candidates.push(target);
+    for (const cand of candidates) {
+      const idx = flat.indexOf(cand);
+      if (idx < 0) continue;
+      const targetIdxInFlat = flat.indexOf(target, idx);
+      if (targetIdxInFlat < 0 || targetIdxInFlat >= idx + cand.length) continue;
+      const start = flatToHay[targetIdxInFlat];
+      const end   = flatToHay[targetIdxInFlat + target.length];
+      if (Number.isFinite(start) && Number.isFinite(end) && end > start) return [start, end];
+    }
+    return null;
+  }
+
+  // Image redaction overlay: a transparent layer above the inline <img>
+  // that captures drag-rectangles, stores them as 0..1 relative coords,
+  // and shows existing pending rect-redactions as black boxes.
+  function attachImageRedactor(wrap, img) {
+    const meta = window.__sourceContext || {};
+    if (!meta.source_id || !meta.doc_id) return;
+    const s = Store.getSource(meta.doc_id, meta.source_id);
+    if (!s || s.archive_org_url) return; // no redaction once archived
+
+    let mode = 'view';
+    const overlay = el('div.srcv-img-overlay');
+    const drawLayer = el('div.srcv-img-draw');
+    const toggle = el('button.srcv-img-redact-toggle',
+      { onClick: () => setMode(mode === 'view' ? 'redact' : 'view') },
+      el('i.ph.ph-eye-slash'), el('span', ' Redact mode'));
+
+    wrap.style.position = wrap.style.position || 'relative';
+    wrap.appendChild(overlay);
+    overlay.appendChild(drawLayer);
+    wrap.appendChild(toggle);
+
+    function setMode(m) {
+      mode = m;
+      wrap.classList.toggle('srcv-img-redacting', m === 'redact');
+      toggle.classList.toggle('active', m === 'redact');
+      paintExisting();
+    }
+
+    function paintExisting() {
+      while (drawLayer.firstChild) drawLayer.removeChild(drawLayer.firstChild);
+      const cur = Store.getSource(meta.doc_id, meta.source_id);
+      const reds = cur && Array.isArray(cur.redactions) ? cur.redactions.filter(r => r.type === 'rect') : [];
+      for (const r of reds) {
+        const rect = el('div.srcv-img-rect');
+        rect.style.left   = (r.x * 100) + '%';
+        rect.style.top    = (r.y * 100) + '%';
+        rect.style.width  = (r.w * 100) + '%';
+        rect.style.height = (r.h * 100) + '%';
+        const rm = el('button.srcv-img-rect-remove', {
+          title: 'Remove redaction',
+          onClick: async (e) => {
+            e.preventDefault(); e.stopPropagation();
+            try { await Store.removeRedaction(meta.doc_id, meta.source_id, r.id); paintExisting(); }
+            catch (err) { DOM.toast('REMOVE FAILED', err.message || String(err)); }
+          },
+        }, '✕');
+        rect.appendChild(rm);
+        drawLayer.appendChild(rect);
+      }
+    }
+
+    let dragStart = null;
+    let dragRect = null;
+    overlay.addEventListener('mousedown', (e) => {
+      if (mode !== 'redact') return;
+      const bounds = overlay.getBoundingClientRect();
+      dragStart = { x: e.clientX - bounds.left, y: e.clientY - bounds.top, bounds };
+      dragRect = el('div.srcv-img-rect.srcv-img-rect-drawing');
+      Object.assign(dragRect.style, { left: dragStart.x + 'px', top: dragStart.y + 'px', width: '0px', height: '0px' });
+      drawLayer.appendChild(dragRect);
+      e.preventDefault();
+    });
+    overlay.addEventListener('mousemove', (e) => {
+      if (!dragStart || !dragRect) return;
+      const x = Math.min(dragStart.bounds.width, Math.max(0, e.clientX - dragStart.bounds.left));
+      const y = Math.min(dragStart.bounds.height, Math.max(0, e.clientY - dragStart.bounds.top));
+      const left = Math.min(x, dragStart.x);
+      const top  = Math.min(y, dragStart.y);
+      const w = Math.abs(x - dragStart.x);
+      const h = Math.abs(y - dragStart.y);
+      Object.assign(dragRect.style, { left: left + 'px', top: top + 'px', width: w + 'px', height: h + 'px' });
+    });
+    overlay.addEventListener('mouseup', async (e) => {
+      if (!dragStart || !dragRect) return;
+      const x = Math.min(dragStart.bounds.width, Math.max(0, e.clientX - dragStart.bounds.left));
+      const y = Math.min(dragStart.bounds.height, Math.max(0, e.clientY - dragStart.bounds.top));
+      const left = Math.min(x, dragStart.x);
+      const top  = Math.min(y, dragStart.y);
+      const w = Math.abs(x - dragStart.x);
+      const h = Math.abs(y - dragStart.y);
+      dragRect.remove(); dragRect = null;
+      const b = dragStart.bounds; dragStart = null;
+      if (w < 6 || h < 6) return; // ignore tiny drags
+      try {
+        await Store.addRedaction(meta.doc_id, meta.source_id, {
+          type: 'rect', x: left / b.width, y: top / b.height,
+          w: w / b.width, h: h / b.height,
+          label: 'image area',
+        });
+        paintExisting();
+      } catch (err) {
+        DOM.toast('REDACT FAILED', err.message || String(err));
+      }
+    });
+
+    paintExisting();
+  }
+
   function attachQuoteToolbar(textHost, scopeDoc) {
     const bar = el('div.srcv-quotebar', { style: { display: 'none' } });
     // Capture the selection at the moment the bar appears — clicking a button
@@ -382,8 +680,21 @@
     bar.appendChild(el('button', { onMousedown: (e) => e.preventDefault(), onClick: copySel }, icon('copy', 13), el('span', ' Copy')));
     bar.appendChild(el('button.accent', { onMousedown: (e) => e.preventDefault(), onClick: useAsQuote }, icon('quotes', 13), el('span', ' Use as passage')));
     bar.appendChild(el('button.accent', { onMousedown: (e) => e.preventDefault(), onClick: saveExhibit }, icon('scissors', 13), el('span', ' Save as exhibit')));
+    // Redact only shows when the active source isn't archived yet — once
+    // it's public on archive.org, destructive redaction is meaningless.
+    const redactBtn = el('button.danger',
+      { onMousedown: (e) => e.preventDefault(), onClick: redactSel, style: { display: 'none' } },
+      icon('eye-slash', 13), el('span', ' Redact'));
+    bar.appendChild(redactBtn);
     document.body.appendChild(bar);
     const sourceDoc = scopeDoc || document;
+
+    function refreshRedactBtn() {
+      const meta = window.__sourceContext || {};
+      const src = (meta.source_id && meta.doc_id) ? Store.getSource(meta.doc_id, meta.source_id) : null;
+      const ok = src && !src.archive_org_url && typeof Store.addRedaction === 'function';
+      redactBtn.style.display = ok ? '' : 'none';
+    }
 
     function place() {
       const sel = sourceDoc.getSelection ? sourceDoc.getSelection() : window.getSelection();
@@ -393,6 +704,7 @@
       if (!rect.width && !rect.height) { bar.style.display = 'none'; return; }
       // Snapshot the live selection — clicks below shouldn't lose it.
       captured = sel.toString().trim();
+      refreshRedactBtn();
       let offsetX = 0, offsetY = 0;
       if (scopeDoc && scopeDoc.defaultView && scopeDoc.defaultView.frameElement) {
         const f = scopeDoc.defaultView.frameElement.getBoundingClientRect();
@@ -484,6 +796,32 @@
       window.__stagedPassage = t;
       DOM.toast('PASSAGE STAGED', 'Switch to a draft and click Cite to attach it.', 4500);
     }
+    async function redactSel() {
+      const t = selText();
+      if (!t) return;
+      const meta = window.__sourceContext || {};
+      if (!meta.source_id || !meta.doc_id) {
+        DOM.toast('NO SOURCE', 'Open a source first.');
+        return;
+      }
+      const ctx = captureContext();
+      const preview = t.length > 40 ? t.slice(0, 37) + '…' : t;
+      try {
+        await Store.addRedaction(meta.doc_id, meta.source_id, {
+          type: 'text',
+          text: t,
+          context_before: ctx.before || '',
+          context_after: ctx.after || '',
+          label: preview,
+        });
+        DOM.toast('REDACTION QUEUED', '"' + preview + '" · apply destructively in the source viewer.', 5500);
+        bar.style.display = 'none';
+        try { sourceDoc.getSelection().removeAllRanges(); } catch (_) {}
+      } catch (err) {
+        DOM.toast('CANNOT REDACT', err.message || String(err), 6000);
+      }
+    }
+
     function saveExhibit() {
       const t = selText(); if (!t) return;
       const ws_id = window.__currentWs;
