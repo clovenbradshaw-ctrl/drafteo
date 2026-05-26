@@ -50,6 +50,12 @@
   function currentRoute() { return route; }
 
   async function start() {
+    // Standalone exhibit mini-page mode: when the URL hash carries an
+    // encoded exhibit payload, hand the whole page over to the mini-page
+    // renderer. Skips login + workspace boot so the link works for anyone
+    // with the URL, even without a DraftEO session.
+    if (window.ExhibitShare && window.ExhibitShare.takeOverIfExhibitHash()) return;
+
     applyTheme(currentTheme());
     // Wait for Matrix session restore + encrypted cache hydration before
     // deciding which view to render. Otherwise we'd flash the login

@@ -220,10 +220,12 @@
       const scrim = el('div.scrim', { onClick: (e) => { if (e.target === scrim) scrim.remove(); } });
       const labelInp = el('input', { type: 'text', value: ex.label || '', placeholder: 'Label (optional)' });
       let provenanceHtml = '';
+      let liveSource = null;
       if (ex.source_id) {
         for (const d of Store.listDocuments(ws_id)) {
           const s = Store.getSource(d.id, ex.source_id);
           if (s) {
+            liveSource = s;
             provenanceHtml = 'Clipped from <strong>' + (s.title || s.filename) + '</strong>' + (s.archive_org_url ? ' · <a href="' + s.archive_org_url + '" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline">archive.org</a>' : ' · not yet archived');
             break;
           }
@@ -232,6 +234,43 @@
         const d = Store.getDocument(ex.doc_id);
         if (d) provenanceHtml = 'Clipped from draft <strong>' + d.title + '</strong>';
       }
+
+      // Build the shareable mini-page link. Returns null when the exhibit
+      // isn't backed by an archived source — share controls show a hint instead.
+      const shareUrl = (window.ExhibitShare && window.ExhibitShare.buildLink)
+        ? window.ExhibitShare.buildLink(ex, liveSource) : null;
+
+      async function copyShareLink() {
+        if (!shareUrl) return;
+        try {
+          await navigator.clipboard.writeText(shareUrl);
+          DOM.toast('LINK COPIED', 'Anyone with this link can view the exact span on archive.org.', 4000);
+        } catch (_) {
+          DOM.toast('COPY FAILED', 'Browser blocked clipboard access.');
+        }
+      }
+      function openMiniPage() {
+        if (!shareUrl) return;
+        window.open(shareUrl, '_blank', 'noopener');
+      }
+
+      const shareRow = shareUrl
+        ? el('div', { style: { display: 'flex', gap: '8px', alignItems: 'stretch', marginTop: '6px' } },
+            el('input', {
+              type: 'text', value: shareUrl, readonly: true,
+              onClick: (ev) => ev.target.select(),
+              style: { flex: '1', fontFamily: 'var(--mono)', fontSize: '11px', padding: '8px 10px', minWidth: 0 },
+            }),
+            el('button.ghost', { title: 'Copy link', onClick: copyShareLink, style: { whiteSpace: 'nowrap' } }, icon('copy', 12), ' Copy'),
+            el('button.ghost', { title: 'Open mini page', onClick: openMiniPage, style: { whiteSpace: 'nowrap' } }, icon('arrow-square-out', 12), ' Open'),
+          )
+        : el('div', {
+            style: {
+              fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-faint)',
+              padding: '8px 10px', border: '1px dashed var(--border)', borderRadius: '4px', marginTop: '6px',
+            },
+          }, 'Mini-page link will appear here once the source is preserved to archive.org.');
+
       const modal = el('div.modal', { style: { width: 'min(560px, 96vw)' }, onClick: (e) => e.stopPropagation() },
         el('div.m-head', el('div', el('div.ttl', 'Exhibit'), el('div.sub', 'Permanent provenance · ' + DOM.fmtTimeAgo(ex.created_at) + (ex.author ? ' · by ' + ex.author : ''))), el('button.ghost', { onClick: () => scrim.remove() }, '✕')),
         el('div.m-body',
@@ -242,6 +281,8 @@
           el('label', 'Provenance'),
           el('div', { style: { fontFamily: 'var(--sans)', fontSize: '13px', color: 'var(--ink-dim)', html: provenanceHtml }, html: provenanceHtml || 'Origin unknown' }),
           (ex.char_start != null ? el('div', { style: { fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-faint)', marginTop: '8px' } }, 'Characters ' + ex.char_start + '–' + ex.char_end) : null),
+          el('label', { style: { marginTop: '14px' } }, 'Shareable mini page'),
+          shareRow,
         ),
         el('div.m-foot',
           el('button.ghost', { style: { color: 'var(--err)' }, onClick: async () => {

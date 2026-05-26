@@ -25,6 +25,7 @@ import './stubs.js';
 import './recovery-modals.js';
 
 import './dom.js';
+import './exhibit-share.js';
 import './eo.js';
 import './markdown.js';
 import './login.js';
