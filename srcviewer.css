@@ -20,21 +20,21 @@
 .srcv-head {
   display: grid;
   grid-template-columns: 1fr auto;
-  align-items: start;
-  gap: 16px;
-  padding: 14px 24px;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 20px;
   border-bottom: 1px solid var(--border);
   background: var(--chrome);
 }
 .srcv-id { display: flex; gap: 12px; align-items: flex-start; min-width: 0; }
 .srcv-fileico {
   flex-shrink: 0;
-  width: 36px; height: 36px;
+  width: 28px; height: 28px;
   background: var(--accent-deep); color: var(--accent-soft);
   display: grid; place-items: center;
-  font-family: var(--mono); font-size: 10px; font-weight: 700;
+  font-family: var(--mono); font-size: 9px; font-weight: 700;
   letter-spacing: 0.04em;
-  border-radius: 5px;
+  border-radius: 4px;
 }
 .srcv-fileico.web {
   background: color-mix(in srgb, var(--accent) 15%, var(--chrome-2));
@@ -44,14 +44,16 @@
 .srcv-meta { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
 .srcv-ttl {
   font-family: var(--display);
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 700;
   color: var(--ink);
-  line-height: 1.25;
+  line-height: 1.2;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.srcv-meta { gap: 2px; }
+.srcv-sub { margin-top: 0; }
 .srcv-sub {
   display: flex; align-items: center; flex-wrap: wrap;
   gap: 7px;
@@ -255,6 +257,13 @@
   border: 0;
   background: #fff;
 }
+.srcv-pdf-host {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--chrome-2);
+  padding: 16px 0;
+}
 .srcv-image-wrap {
   flex: 1;
   display: grid; place-items: center;
@@ -280,6 +289,7 @@
 }
 .srcv-text {
   flex: 1;
+  min-width: 0;
   font-family: var(--mono);
   font-size: 12px;
   line-height: 1.6;
@@ -291,6 +301,22 @@
   background: var(--surface);
   overflow: auto;
 }
+
+/* Readable view — serif prose column with paragraph spacing. */
+.srcv-text.dechrome {
+  font-family: var(--serif, Georgia, serif);
+  font-size: 15px;
+  line-height: 1.7;
+  padding: 32px 36px;
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+.srcv-text.dechrome .srcv-para {
+  margin: 0 auto 14px;
+  max-width: 720px;
+}
+.srcv-text.dechrome .srcv-para:last-child { margin-bottom: 0; }
 .srcv-empty {
   flex: 1;
   display: flex; flex-direction: column;

@@ -11,7 +11,8 @@
   "dependencies": {
     "marked": "^18.0.4",
     "matrix-encrypt-attachment": "^1.0.3",
-    "matrix-js-sdk": "^41.5.0"
+    "matrix-js-sdk": "^41.5.0",
+    "pdfjs-dist": "^5.7.284"
   },
   "devDependencies": {
     "vite": "^6.3.5",
