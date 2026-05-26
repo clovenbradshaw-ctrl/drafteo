@@ -638,11 +638,8 @@ export const Store = {
     // Fetch + decrypt the source binary so n8n receives the plaintext.
     const client = getClient();
     if (!client) throw new Error('Not connected');
-    const httpUrl = client.mxcUrlToHttp(s.mxc_uri);
-    if (!httpUrl) throw new Error('Could not resolve mxc URL.');
-    const cipherResp = await fetch(httpUrl);
-    if (!cipherResp.ok) throw new Error('media fetch failed: HTTP ' + cipherResp.status);
-    const cipherBuf = await cipherResp.arrayBuffer();
+    const cipherBuf = await fetchMxcCiphertext(client, s.mxc_uri);
+    if (!cipherBuf) throw new Error('Could not resolve mxc URL.');
     let plaintextBuf = cipherBuf;
     if (s.encryption_info) {
       plaintextBuf = await decryptAttachment(cipherBuf, s.encryption_info);
@@ -759,11 +756,8 @@ export const Store = {
     if (!source || !source.mxc_uri) return null;
     const client = getClient();
     if (!client) return null;
-    const httpUrl = client.mxcUrlToHttp(source.mxc_uri);
-    if (!httpUrl) return null;
-    const resp = await fetch(httpUrl);
-    if (!resp.ok) throw new Error('media fetch failed: HTTP ' + resp.status);
-    const buf = await resp.arrayBuffer();
+    const buf = await fetchMxcCiphertext(client, source.mxc_uri);
+    if (!buf) return null;
     let plaintext = buf;
     if (source.encryption_info) {
       plaintext = await decryptAttachment(buf, source.encryption_info);
@@ -1269,6 +1263,39 @@ function subsequenceMatch(hay, needle) {
   return i === needle.length;
 }
 
+// Fetch a ciphertext blob from the homeserver media repo. Tries the
+// authenticated endpoint (Synapse 1.100+ default) with a Bearer token,
+// falls back to the legacy unauthenticated URL if the SDK or server
+// can't resolve it. Returns ArrayBuffer or null.
+async function fetchMxcCiphertext(client, mxc) {
+  if (!mxc) return null;
+  const token = client.getAccessToken ? client.getAccessToken() : null;
+
+  let authedUrl = null;
+  try {
+    authedUrl = client.mxcUrlToHttp(mxc, undefined, undefined, undefined, undefined, undefined, true);
+  } catch { authedUrl = null; }
+  const legacyUrl = client.mxcUrlToHttp(mxc);
+
+  const tryFetch = async (url, withAuth) => {
+    if (!url) return null;
+    const headers = withAuth && token ? { Authorization: 'Bearer ' + token } : undefined;
+    const r = await fetch(url, headers ? { headers } : undefined);
+    if (!r.ok) return { error: r.status };
+    return { buf: await r.arrayBuffer() };
+  };
+
+  if (authedUrl && token) {
+    const a = await tryFetch(authedUrl, true);
+    if (a && a.buf) return a.buf;
+  }
+  const l = await tryFetch(legacyUrl, false);
+  if (l && l.buf) return l.buf;
+
+  const status = (l && l.error) || 'unknown';
+  throw new Error('media fetch failed: HTTP ' + status);
+}
+
 function sourceCard(e) {
   // Tolerate legacy field names from earlier slices (content_type, size,
   // url, mxc_url) alongside the old DraftEO names. Old UI consumes the
@@ -1290,6 +1317,8 @@ function sourceCard(e) {
     description: e.description || '',
     tags: Array.isArray(e.tags) ? e.tags : [],
     hidden: !!e.hidden,
+    plaintext: e.plaintext || null,
+    snapshot_at: e.snapshot_at || null,
   };
 }
 
