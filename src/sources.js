@@ -71,55 +71,57 @@
     const wrap = el('div', { style: { margin: '0 0 10px' } });
 
     // Tabs
-    const fileTab = el('button.active', { onClick: () => setMode('file') }, icon('file-arrow-up'), ' FILE');
-    const urlTab = el('button', { onClick: () => setMode('url') }, icon('globe'), ' URL');
+    const fileTab = el('button.active', { onClick: () => setMode('file') }, icon('file-arrow-up'), ' FILES');
+    const urlTab = el('button', { onClick: () => setMode('url') }, icon('globe'), ' URLs');
     const tabs = el('div.import-tabs', fileTab, urlTab);
 
     // File drop zone
     const dropzone = el('div.upload-dropzone',
       icon('cloud-arrow-up', 24),
       el('div', { style: { fontSize: '12px', color: 'var(--ink)' } }, 'Drop files here, or click to choose'),
-      el('div', { style: { fontSize: '10px', color: 'var(--ink-faint)', marginTop: '4px' } }, 'PDF · DOCX · Image · Audio · Video · Any file'),
+      el('div', { style: { fontSize: '10px', color: 'var(--ink-faint)', marginTop: '4px' } }, 'PDF · DOCX · Image · Audio · Video · Any file · Multi-select OK'),
     );
-    dropzone.addEventListener('click', () => openFilePicker(doc_id, { refreshSources: onChange }));
+    const fileProgress = el('div.bulk-progress', { style: { display: 'none' } });
+    dropzone.addEventListener('click', () => openFilePicker(doc_id, { refreshSources: onChange }, fileProgress));
     dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('dragover'); });
     dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
     dropzone.addEventListener('drop', async (e) => {
       e.preventDefault(); dropzone.classList.remove('dragover');
-      for (const f of e.dataTransfer.files) await Store.uploadSource(doc_id, f, {});
-      onChange();
+      await bulkUploadFiles(doc_id, Array.from(e.dataTransfer.files), fileProgress, onChange);
     });
 
-    // URL import
-    const urlInput = el('input', { type: 'url', placeholder: 'https://example.com/article' });
-    const goBtn = el('button.primary', { onClick: () => doImport() }, icon('download-simple'), ' IMPORT');
-    const status = el('div.status', '');
-    urlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doImport(); } });
+    // URL import — bulk: multi-line textarea, one URL per line
+    const urlInput = el('textarea', {
+      rows: 4,
+      placeholder: 'Paste one URL per line:\nhttps://example.com/article-1\nhttps://example.com/article-2',
+      style: { width: '100%', boxSizing: 'border-box', resize: 'vertical', minHeight: '78px', fontFamily: 'var(--mono)', fontSize: '11px', lineHeight: '1.5' },
+    });
+    const goBtn = el('button.primary', { onClick: () => doImport() }, icon('download-simple'), ' IMPORT ALL');
+    const urlProgress = el('div.bulk-progress', { style: { display: 'none' } });
+    urlInput.addEventListener('keydown', (e) => {
+      // Cmd/Ctrl-Enter submits the whole batch
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); doImport(); }
+    });
 
     const urlBox = el('div.url-import',
-      el('div.label', icon('globe'), 'Snapshot a web page'),
-      el('div.row', urlInput, goBtn),
-      status,
+      el('div.label', icon('globe'), 'Snapshot one or more web pages'),
+      urlInput,
+      el('div.row', { style: { marginTop: '6px' } }, goBtn),
+      urlProgress,
       el('div', { style: { fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-faint)', marginTop: '6px', lineHeight: '1.5' } },
-        'Fetched server-side via the n8n feed proxy, sanitised, and stored as an HTML snapshot. ',
-        'Archive it to Internet Archive when you\'re ready to publish.'),
+        'Fetched server-side via the n8n feed proxy, sanitised, and stored as HTML snapshots. ',
+        'Archive each to Internet Archive when you\'re ready to publish. Cmd/Ctrl+Enter to submit.'),
     );
     urlBox.style.display = 'none';
 
     async function doImport() {
-      const u = urlInput.value.trim();
-      if (!u) { urlInput.focus(); return; }
-      status.className = 'status'; status.textContent = 'Fetching via proxy…';
+      const urls = extractUrlsFromText(urlInput.value);
+      if (urls.length === 0) { urlInput.focus(); return; }
       goBtn.disabled = true;
       try {
-        const meta = await Store.importFromUrl(doc_id, u);
-        status.className = 'status ok';
-        status.textContent = 'Snapshot saved: ' + meta.title;
-        urlInput.value = '';
-        onChange();
-      } catch (e) {
-        status.className = 'status error';
-        status.textContent = e.message || String(e);
+        const remaining = await bulkImportUrls(doc_id, urls, urlProgress, onChange);
+        // Keep failures in the textarea so the user can retry; clear succeeded.
+        urlInput.value = remaining.join('\n');
       } finally {
         goBtn.disabled = false;
       }
@@ -130,14 +132,97 @@
       fileTab.classList.toggle('active', m === 'file');
       urlTab.classList.toggle('active', m === 'url');
       dropzone.style.display = m === 'file' ? '' : 'none';
+      fileProgress.style.display = m === 'file' && fileProgress.children.length ? '' : 'none';
       urlBox.style.display = m === 'url' ? '' : 'none';
       if (m === 'url') setTimeout(() => urlInput.focus(), 30);
     }
 
     wrap.appendChild(tabs);
     wrap.appendChild(dropzone);
+    wrap.appendChild(fileProgress);
     wrap.appendChild(urlBox);
     return wrap;
+  }
+
+  // Pull URLs out of free-form text (newlines, commas, or interleaved prose).
+  function extractUrlsFromText(text) {
+    if (!text) return [];
+    const urls = [];
+    const seen = new Set();
+    const re = /https?:\/\/[^\s<>"'`]+/gi;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      // Trim trailing punctuation that's almost certainly not part of the URL.
+      let u = m[0].replace(/[.,;:!?)\]}'"”’]+$/g, '');
+      if (!seen.has(u)) { seen.add(u); urls.push(u); }
+    }
+    return urls;
+  }
+
+  function makeProgressRow(label) {
+    const status = el('span.bp-status', 'queued');
+    const row = el('div.bp-row',
+      el('span.bp-label', label),
+      status,
+    );
+    return { row, setState(state, text) {
+      status.className = 'bp-status bp-' + state;
+      status.textContent = text || state;
+    }};
+  }
+
+  // Returns the list of URLs that failed (so caller can leave them in the input).
+  async function bulkImportUrls(doc_id, urls, progressNode, onChange) {
+    clear(progressNode);
+    progressNode.style.display = 'block';
+    const rows = urls.map((u) => {
+      const r = makeProgressRow(u);
+      progressNode.appendChild(r.row);
+      return { url: u, ...r };
+    });
+    const failed = [];
+    let ok = 0;
+    for (const item of rows) {
+      item.setState('working', 'fetching…');
+      try {
+        const meta = await Store.importFromUrl(doc_id, item.url);
+        item.setState('ok', 'saved · ' + (meta.title || 'untitled').slice(0, 48));
+        ok++;
+        // Refresh after each so the user sees the list growing.
+        onChange();
+      } catch (e) {
+        item.setState('error', (e.message || String(e)).slice(0, 80));
+        failed.push(item.url);
+      }
+    }
+    DOM.toast(failed.length ? 'IMPORT FINISHED' : 'IMPORTED',
+      ok + ' of ' + rows.length + ' snapshot(s) saved' + (failed.length ? ' · ' + failed.length + ' failed' : ''),
+      4500);
+    return failed;
+  }
+
+  async function bulkUploadFiles(doc_id, files, progressNode, onChange) {
+    if (!files || files.length === 0) return;
+    clear(progressNode);
+    progressNode.style.display = 'block';
+    const rows = files.map((f) => {
+      const r = makeProgressRow(f.name + ' · ' + DOM.fmtBytes(f.size));
+      progressNode.appendChild(r.row);
+      return { file: f, ...r };
+    });
+    let ok = 0;
+    for (const item of rows) {
+      item.setState('working', 'uploading…');
+      try {
+        await Store.uploadSource(doc_id, item.file, {});
+        item.setState('ok', 'uploaded');
+        ok++;
+        onChange();
+      } catch (e) {
+        item.setState('error', (e.message || String(e)).slice(0, 80));
+      }
+    }
+    DOM.toast('UPLOAD DONE', ok + ' of ' + rows.length + ' file(s) uploaded', 4000);
   }
 
   function icon(name, size) {
@@ -161,11 +246,11 @@
         el('div.fileico', isWeb ? '🌐' : DOM.fileExt(s.mime, s.filename)),
         el('div',
           el('div.ttl', s.title || s.filename, isWeb ? el('span.badge-web', icon('globe'), 'WEB') : null),
-          el('div.meta', DOM.fmtBytes(s.size_bytes) + ' · ' + (s.filename) + ' · ' + DOM.fmtTimeAgo(s.uploaded_at)),
+          el('div.meta', DOM.fmtBytes(s.size_bytes) + (isWeb ? '' : ' · ' + s.filename) + ' · ' + DOM.fmtTimeAgo(s.uploaded_at)),
           isWeb ? el('a.source-url', { href: s.source_url, target: '_blank', rel: 'noopener' }, icon('arrow-square-out'), s.source_url) : null,
         ),
       ),
-      s.description ? el('div.desc', s.description) : null,
+      (s.description && !(isWeb && /^Web snapshot of https?:\/\//i.test(s.description))) ? el('div.desc', s.description) : null,
       s.tags && s.tags.length ? el('div.tags', ...s.tags.map(t => el('span.tag', t))) : null,
       archived ? el('div.archived-link',
         el('span', '⛓'), el('span', { style: { textTransform: 'uppercase', letterSpacing: '0.1em', fontSize: '9px', color: 'var(--ok)' } }, 'Archived'),
@@ -208,13 +293,18 @@
     ed.insertCitation(s.source_id);
   }
 
-  function openFilePicker(doc_id, ed) {
+  function openFilePicker(doc_id, ed, progressNode) {
     const inp = document.createElement('input');
     inp.type = 'file';
     inp.multiple = true;
     inp.onchange = async () => {
-      for (const f of inp.files) { await Store.uploadSource(doc_id, f, {}); }
-      ed.refreshSources();
+      const files = Array.from(inp.files || []);
+      if (progressNode) {
+        await bulkUploadFiles(doc_id, files, progressNode, () => ed.refreshSources && ed.refreshSources());
+      } else {
+        for (const f of files) { await Store.uploadSource(doc_id, f, {}); }
+        ed.refreshSources && ed.refreshSources();
+      }
     };
     inp.click();
   }
@@ -423,5 +513,11 @@
     }
   }
 
-  window.SourcePanel = { build: buildPanel, openArchive: openArchiveModal };
+  window.SourcePanel = {
+    build: buildPanel,
+    openArchive: openArchiveModal,
+    bulkImportUrls,
+    bulkUploadFiles,
+    extractUrlsFromText,
+  };
 })();

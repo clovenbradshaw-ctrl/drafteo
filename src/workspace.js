@@ -370,15 +370,17 @@
       const dropzone = el('div', { style: { border: '2px dashed var(--border-2)', padding: '32px', textAlign: 'center', fontFamily: 'var(--sans)', fontSize: '13px', color: 'var(--ink-dim)', cursor: 'pointer', borderRadius: '6px' } },
         icon('cloud-arrow-up', 28),
         el('div', { style: { marginTop: '8px' } }, 'Drop files here, or click to choose'),
-        el('div', { style: { fontSize: '11px', color: 'var(--ink-faint)', marginTop: '4px' } }, 'PDF · DOCX · Image · Audio · Video · Any file'),
+        el('div', { style: { fontSize: '11px', color: 'var(--ink-faint)', marginTop: '4px' } }, 'PDF · DOCX · Image · Audio · Video · Any file · Multi-select OK'),
       );
+      const fileProgress = el('div.bulk-progress', { style: { display: 'none' } });
       dropzone.addEventListener('click', () => {
         const inp = document.createElement('input');
         inp.type = 'file'; inp.multiple = true;
         inp.onchange = async () => {
-          for (const f of inp.files) await Store.uploadSource(target_doc_id, f, {});
-          scrim.remove(); renderSidebar();
-          DOM.toast('UPLOADED', inp.files.length + ' source' + (inp.files.length === 1 ? '' : 's') + ' added');
+          const files = Array.from(inp.files || []);
+          await (window.SourcePanel.bulkUploadFiles
+            ? window.SourcePanel.bulkUploadFiles(target_doc_id, files, fileProgress, () => renderSidebar())
+            : (async () => { for (const f of files) await Store.uploadSource(target_doc_id, f, {}); renderSidebar(); })());
         };
         inp.click();
       });
@@ -386,35 +388,38 @@
       dropzone.addEventListener('dragleave', () => dropzone.style.borderColor = '');
       dropzone.addEventListener('drop', async (e) => {
         e.preventDefault(); dropzone.style.borderColor = '';
-        for (const f of e.dataTransfer.files) await Store.uploadSource(target_doc_id, f, {});
-        scrim.remove(); renderSidebar();
-        DOM.toast('UPLOADED', e.dataTransfer.files.length + ' source(s) added');
+        const files = Array.from(e.dataTransfer.files || []);
+        await window.SourcePanel.bulkUploadFiles(target_doc_id, files, fileProgress, () => renderSidebar());
       });
 
-      const urlInput = el('input', { type: 'url', placeholder: 'https://example.com/article' });
-      const urlStatus = el('div', { style: { fontFamily: 'var(--sans)', fontSize: '11px', color: 'var(--ink-faint)', minHeight: '14px', marginTop: '8px' } });
-      const urlGo = el('button.primary', { onClick: doImport }, 'Snapshot');
+      const urlInput = el('textarea', {
+        rows: 5,
+        placeholder: 'Paste one URL per line:\nhttps://example.com/article-1\nhttps://example.com/article-2',
+        style: { width: '100%', boxSizing: 'border-box', resize: 'vertical', minHeight: '92px', fontFamily: 'var(--mono)', fontSize: '11px', lineHeight: '1.5' },
+      });
+      const urlProgress = el('div.bulk-progress', { style: { display: 'none' } });
+      const urlGo = el('button.primary', { onClick: doImport }, 'Snapshot all');
       async function doImport() {
-        const u = urlInput.value.trim();
-        if (!u) { urlInput.focus(); return; }
-        urlStatus.textContent = 'Fetching via proxy…';
+        const urls = window.SourcePanel.extractUrlsFromText(urlInput.value);
+        if (urls.length === 0) { urlInput.focus(); return; }
         urlGo.disabled = true;
         try {
-          const meta = await Store.importFromUrl(target_doc_id, u);
-          DOM.toast('SNAPSHOT', meta.title);
-          scrim.remove(); renderSidebar();
-        } catch (e) {
-          urlStatus.textContent = 'Error: ' + (e.message || e);
+          const failed = await window.SourcePanel.bulkImportUrls(target_doc_id, urls, urlProgress, () => renderSidebar());
+          urlInput.value = failed.join('\n');
+        } finally {
           urlGo.disabled = false;
         }
       }
-      urlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doImport(); });
+      urlInput.addEventListener('keydown', (e) => {
+        if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); doImport(); }
+      });
       const urlBox = el('div', { style: { display: 'none' } },
-        el('label', 'Page URL'),
-        el('div', { style: { display: 'flex', gap: '8px' } }, urlInput, urlGo),
-        urlStatus,
+        el('label', 'Page URLs'),
+        urlInput,
+        el('div', { style: { display: 'flex', gap: '8px', marginTop: '6px' } }, urlGo),
+        urlProgress,
         el('div', { style: { fontFamily: 'var(--sans)', fontSize: '11px', color: 'var(--ink-faint)', marginTop: '10px', lineHeight: 1.5 } },
-          'Fetched server-side via the n8n feed proxy, sanitised, and stored as an HTML snapshot. Archive it to archive.org when ready to publish.'),
+          'Paste many URLs at once — one per line. Each is fetched via the n8n feed proxy, sanitised, and stored as an HTML snapshot. Cmd/Ctrl+Enter submits. Archive to archive.org when ready to publish.'),
       );
 
       function setMode(m) {
@@ -429,7 +434,7 @@
       const targetDoc = Store.getDocument(target_doc_id);
       const modal = el('div.modal', { style: { width: 'min(560px, 96vw)' }, onClick: (e) => e.stopPropagation() },
         el('div.m-head', el('div', el('div.ttl', 'Add source'), el('div.sub', 'Attaching to: ' + (targetDoc && targetDoc.title || 'a draft'))), el('button.ghost', { onClick: () => scrim.remove() }, '✕')),
-        el('div.m-body', tabs, dropzone, urlBox),
+        el('div.m-body', tabs, dropzone, fileProgress, urlBox),
       );
       scrim.appendChild(modal);
       document.body.appendChild(scrim);

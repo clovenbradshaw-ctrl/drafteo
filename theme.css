@@ -160,6 +160,17 @@ button.primary.cta-big i.ph {
   flex: 1;
   font-family: var(--mono); font-size: 12px;
 }
+.url-import textarea {
+  width: 100%; box-sizing: border-box;
+  font-family: var(--mono); font-size: 12px;
+  background: var(--chrome-2);
+  border: 1px solid var(--border);
+  color: var(--ink);
+  padding: 8px;
+  border-radius: 3px;
+  resize: vertical;
+}
+.url-import textarea:focus { outline: none; border-color: var(--accent); }
 .url-import .status {
   margin-top: 6px;
   font-family: var(--mono); font-size: 10px;
