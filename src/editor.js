@@ -753,14 +753,43 @@
     body.addEventListener('input', () => markDirty());
     body.addEventListener('blur', () => { if (dirty) doSave(); });
 
-    // ---- detect URLs in pasted text ----
+    // ---- paste: images embed inline (Substack-style); URLs detected for import ----
     body.addEventListener('paste', (e) => {
-      // Read plain text from clipboard without blocking the native paste —
-      // we only inspect, not interfere. (User's existing paste lands as
-      // usual; we just look for URLs and offer to import.)
       try {
         const data = e.clipboardData || window.clipboardData;
         if (!data) return;
+
+        // Image files in the clipboard (screenshot, copied image, drag from
+        // browser): embed inline as data URLs. Default-paste otherwise drops
+        // them on the floor.
+        const imageFiles = [];
+        for (const item of data.items || []) {
+          if (item.kind === 'file' && (item.type || '').startsWith('image/')) {
+            const f = item.getAsFile();
+            if (f) imageFiles.push(f);
+          }
+        }
+        if (imageFiles.length > 0) {
+          e.preventDefault();
+          for (const file of imageFiles) {
+            const reader = new FileReader();
+            reader.onload = () => {
+              const url = reader.result;
+              try {
+                document.execCommand('insertHTML', false,
+                  '<img src="' + String(url).replace(/"/g, '&quot;') +
+                  '" alt="' + String(file.name || 'pasted image').replace(/"/g, '&quot;') +
+                  '" style="max-width:100%;height:auto" />');
+              } catch (_) {}
+              markDirty();
+            };
+            reader.readAsDataURL(file);
+          }
+          return;
+        }
+
+        // Read plain text without blocking the native paste — we only
+        // inspect for URLs and offer to import.
         const text = data.getData('text/plain') || data.getData('text/html') || '';
         if (!text) return;
         const urls = window.SourcePanel && window.SourcePanel.extractUrlsFromText
@@ -775,6 +804,104 @@
         setTimeout(() => offerImportPastedUrls(fresh), 0);
       } catch (_) { /* never break paste */ }
     });
+
+    // ---- right-click on inline image: add as source ----
+    body.addEventListener('contextmenu', (e) => {
+      const img = e.target && e.target.tagName === 'IMG' ? e.target : null;
+      if (!img) return;
+      e.preventDefault();
+      showImageContextMenu(img, e.clientX, e.clientY);
+    });
+
+    function showImageContextMenu(img, x, y) {
+      // Close any previous menu first.
+      const prev = document.querySelector('.editor-imgmenu');
+      if (prev) prev.remove();
+
+      const menu = el('div.editor-imgmenu', {
+        style: {
+          position: 'fixed', left: x + 'px', top: y + 'px', zIndex: '9999',
+          background: 'var(--chrome-2)', border: '1px solid var(--border)',
+          borderRadius: '4px', boxShadow: '0 6px 22px rgba(0,0,0,0.35)',
+          padding: '4px 0', minWidth: '180px', fontFamily: 'var(--sans)', fontSize: '12px',
+        },
+      });
+      function item(label, onClick) {
+        const b = el('button', {
+          style: {
+            display: 'block', width: '100%', textAlign: 'left',
+            padding: '8px 14px', border: '0', background: 'transparent',
+            color: 'var(--ink)', cursor: 'pointer', fontSize: '12px',
+            fontFamily: 'var(--sans)',
+          },
+          onClick: () => { menu.remove(); onClick(); },
+        }, label);
+        b.addEventListener('mouseenter', () => { b.style.background = 'var(--chrome-3)'; });
+        b.addEventListener('mouseleave', () => { b.style.background = 'transparent'; });
+        return b;
+      }
+      menu.appendChild(item('Add as source', () => addImageAsSource(img)));
+      if (img.src && /^https?:\/\//i.test(img.src)) {
+        menu.appendChild(item('Open image in new tab', () => window.open(img.src, '_blank', 'noopener')));
+      }
+      menu.appendChild(item('Cancel', () => {}));
+      document.body.appendChild(menu);
+
+      const closer = (ev) => {
+        if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('mousedown', closer); }
+      };
+      setTimeout(() => document.addEventListener('mousedown', closer), 0);
+    }
+
+    async function addImageAsSource(img) {
+      const src = img.src || '';
+      if (!src) { DOM.toast('NO IMAGE URL', 'This image has no src.'); return; }
+      try {
+        if (/^https?:\/\//i.test(src)) {
+          // External image — register as a URL-only source with the image URL.
+          // Reuses the URL import flow so it appears as a real source the user
+          // can later archive to archive.org. The proxy may not return useful
+          // HTML for direct image URLs, so we fall back to a manual upload of
+          // the image bytes if importFromUrl errors.
+          DOM.toast('IMPORTING IMAGE', src.slice(0, 80) + '…', 2000);
+          try {
+            await Store.importFromUrl(doc_id, src);
+          } catch (_) {
+            // Fetch the bytes and upload as a normal source.
+            const resp = await fetch(src, { mode: 'cors' });
+            if (!resp.ok) throw new Error('Could not fetch image (HTTP ' + resp.status + ')');
+            const blob = await resp.blob();
+            const filename = (src.split('?')[0].split('/').pop() || 'image').slice(0, 80);
+            const file = new File([blob], filename, { type: blob.type || 'image/png' });
+            await Store.uploadSource(doc_id, file, { source_url: src });
+          }
+        } else if (src.startsWith('data:')) {
+          // Inline image (pasted screenshot etc.) — convert to a file and upload.
+          const [meta, b64] = src.split(',');
+          const mime = (meta.match(/data:([^;]+)/) || [, 'image/png'])[1];
+          const bytes = atob(b64 || '');
+          const arr = new Uint8Array(bytes.length);
+          for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+          const ext = (mime.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '');
+          const filename = 'pasted-image-' + Date.now() + '.' + ext;
+          const file = new File([arr], filename, { type: mime });
+          await Store.uploadSource(doc_id, file, {});
+        } else if (src.startsWith('blob:')) {
+          const resp = await fetch(src);
+          const blob = await resp.blob();
+          const filename = 'pasted-image-' + Date.now() + '.' + (blob.type.split('/')[1] || 'png');
+          const file = new File([blob], filename, { type: blob.type || 'image/png' });
+          await Store.uploadSource(doc_id, file, {});
+        } else {
+          DOM.toast('UNSUPPORTED', 'Image src is neither URL nor data/blob.', 3000);
+          return;
+        }
+        DOM.toast('IMAGE ADDED', 'Available as a source you can cite or archive.', 3500);
+        if (sourceRefresh) sourceRefresh();
+      } catch (err) {
+        DOM.toast('IMPORT FAILED', (err && err.message) || String(err), 4500);
+      }
+    }
 
     let pasteBanner = null;
     function offerImportPastedUrls(urls) {

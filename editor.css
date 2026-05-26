@@ -634,8 +634,10 @@ input[type="radio"] {
   word-break: break-all;
 }
 .srccard .actions {
-  display: flex; gap: 6px; margin-top: 10px;
+  display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px;
+  min-width: 0; max-width: 100%;
 }
+.srccard .actions > * { min-width: 0; }
 .srccard .actions button {
   font-family: var(--sans);
   font-size: 11px;
@@ -643,6 +645,7 @@ input[type="radio"] {
   padding: 4px 9px;
   letter-spacing: 0; text-transform: none;
   border-radius: 3px;
+  white-space: nowrap;
 }
 .srccard .badge-web {
   display: inline-flex; align-items: center; gap: 4px;

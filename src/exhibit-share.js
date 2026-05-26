@@ -19,6 +19,7 @@
 //     s:  source title
 //     l:  exhibit label  (optional)
 //     n:  note           (optional)
+//     o:  original source URL (when imported from the web; optional)
 //   }
 
 (function () {
@@ -64,6 +65,7 @@
       s: (source && (source.title || source.filename)) || prov.source_title || '',
       l: exhibit.label || '',
       n: exhibit.note || '',
+      o: (source && source.source_url) || prov.source_url || '',
     };
     const encoded = b64urlEncode(JSON.stringify(payload));
     const base = location.origin + location.pathname;
@@ -185,7 +187,7 @@
         break;
       }
     }
-    if (matchStart < 0) return false;
+    if (matchStart < 0) return null;
     const matchEnd = matchStart + matchLen;
 
     const findPos = (off) => {
@@ -195,7 +197,7 @@
       return null;
     };
     const a = findPos(matchStart), b = findPos(matchEnd);
-    if (!a || !b) return false;
+    if (!a || !b) return null;
 
     try {
       const range = doc.createRange();
@@ -212,13 +214,16 @@
         range.insertNode(mark);
       }
       // Center it. rAF gives the browser a tick to lay out the iframe / DOM.
+      // Scroll both the doc-internal scroller AND the page so the user
+      // actually lands on the borrowed text.
       requestAnimationFrame(() => {
         try { mark.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_) {}
+        try { mark.classList.add('flash'); } catch (_) {}
       });
-      return true;
+      return mark;
     } catch (err) {
       console.warn('[exhibit-share] highlight failed', err);
-      return false;
+      return null;
     }
   }
 
@@ -229,20 +234,17 @@
       .exh-mini-body { margin: 0; background: #0f1014; color: #e5e7eb;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         min-height: 100vh; }
-      .exh-mini { max-width: 980px; margin: 0 auto; padding: 28px 24px 60px; }
-      .exh-mini-head { display: flex; align-items: flex-start; gap: 18px;
-        padding-bottom: 16px; border-bottom: 1px solid #2a2d36; margin-bottom: 20px; }
+      .exh-mini { max-width: 920px; margin: 0 auto; padding: 18px 24px 60px; }
+      .exh-mini-bar { display: flex; align-items: center; gap: 12px;
+        padding-bottom: 12px; margin-bottom: 28px;
+        border-bottom: 1px solid #2a2d36; }
       .exh-mini-logo { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
         font-size: 12px; letter-spacing: 0.14em; color: #94a3b8; text-decoration: none;
         padding: 6px 10px; border: 1px solid #2a2d36; border-radius: 4px; white-space: nowrap; }
       .exh-mini-logo:hover { color: #e5e7eb; border-color: #475569; }
-      .exh-mini-titlewrap { flex: 1; min-width: 0; }
-      .exh-mini-eyebrow { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
-        font-size: 10px; letter-spacing: 0.18em; color: #64748b; text-transform: uppercase;
-        margin-bottom: 6px; }
-      .exh-mini-title { font-size: 22px; font-weight: 600; color: #f8fafc;
-        line-height: 1.25; word-wrap: break-word; }
-      .exh-mini-source { font-size: 13px; color: #94a3b8; margin-top: 6px; word-wrap: break-word; }
+      .exh-mini-bar-source { flex: 1; min-width: 0; font-size: 12px; color: #94a3b8;
+        word-wrap: break-word; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .exh-mini-bar-source strong { color: #e5e7eb; font-weight: 600; }
       .exh-mini-actions { display: flex; gap: 8px; flex-wrap: wrap; }
       .exh-mini-btn { display: inline-flex; align-items: center; gap: 6px;
         font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
@@ -252,14 +254,41 @@
       .exh-mini-btn:hover { border-color: #475569; background: #1e2128; }
       .exh-mini-btn.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
       .exh-mini-btn.primary:hover { background: #1d4ed8; border-color: #1d4ed8; }
-      .exh-mini-quote { margin: 8px 0 22px; padding: 16px 20px;
-        border-left: 3px solid #fbbf24; background: #1a1c22; border-radius: 4px;
-        font-size: 15px; line-height: 1.65; }
-      .exh-mini-quote .ctx { color: #64748b; }
-      .exh-mini-quote mark { background: #fbbf24; color: #0f1014;
-        padding: 0 2px; border-radius: 2px; }
-      .exh-mini-note { color: #cbd5e1; font-size: 13px; line-height: 1.55;
-        margin-bottom: 22px; padding-left: 14px; border-left: 2px solid #2a2d36; }
+      .exh-mini-hero { text-align: center; padding: 28px 8px 44px;
+        max-width: 760px; margin: 0 auto; }
+      .exh-mini-eyebrow { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+        font-size: 10px; letter-spacing: 0.22em; color: #64748b; text-transform: uppercase;
+        margin-bottom: 14px; }
+      .exh-mini-label { font-size: 14px; font-weight: 600; color: #cbd5e1;
+        margin-bottom: 18px; letter-spacing: 0.02em; }
+      .exh-mini-quote { font-family: Georgia, "Times New Roman", serif;
+        font-size: 26px; line-height: 1.5; color: #f8fafc;
+        text-align: left; margin: 0 auto; max-width: 680px; }
+      .exh-mini-quote .ctx { color: #475569; font-size: 17px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        font-style: italic; }
+      .exh-mini-quote .borrowed { background: linear-gradient(transparent 62%, rgba(251, 191, 36, 0.55) 62%);
+        padding: 0 4px; color: #fef3c7; font-weight: 500; }
+      .exh-mini-note { color: #94a3b8; font-size: 14px; line-height: 1.6;
+        margin: 22px auto 0; max-width: 600px; padding-top: 18px;
+        border-top: 1px solid #2a2d36; font-style: italic; }
+      .exh-mini-origin { display: flex; align-items: baseline; gap: 10px;
+        margin: 22px auto 0; max-width: 680px; padding-top: 16px;
+        border-top: 1px solid #2a2d36; flex-wrap: wrap;
+        text-align: left; }
+      .exh-mini-origin-label { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+        font-size: 10px; letter-spacing: 0.18em; color: #64748b; text-transform: uppercase;
+        flex-shrink: 0; }
+      .exh-mini-origin-link { color: #93c5fd; text-decoration: underline;
+        text-underline-offset: 3px; font-size: 14px; word-break: break-all;
+        flex: 1; min-width: 0; }
+      .exh-mini-origin-link:hover { color: #bfdbfe; }
+      .exh-mini-divider { display: flex; align-items: center; gap: 14px;
+        margin: 8px 0 18px; color: #64748b;
+        font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+        font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; }
+      .exh-mini-divider::before, .exh-mini-divider::after { content: '';
+        flex: 1; height: 1px; background: #2a2d36; }
       .exh-mini-doc-head { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
         font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
         color: #64748b; margin-bottom: 10px; display: flex; align-items: center;
@@ -279,6 +308,11 @@
       .exh-mini-doc .exh-mini-mark { background: #fde047; color: #0f1014;
         padding: 1px 2px; border-radius: 2px;
         box-shadow: 0 0 0 4px rgba(253, 224, 71, 0.4); }
+      .exh-mini-doc .exh-mini-mark.flash { animation: exh-flash 1.4s ease-out 2; }
+      @keyframes exh-flash {
+        0%, 100% { box-shadow: 0 0 0 4px rgba(253, 224, 71, 0.4); }
+        50% { box-shadow: 0 0 0 10px rgba(253, 224, 71, 0.65); }
+      }
       .exh-mini-iframe { width: 100%; height: 70vh; border: 0; border-radius: 6px;
         background: #fff; }
       .exh-mini-fallback { padding: 28px; background: #14161c; border: 1px dashed #2a2d36;
@@ -310,6 +344,9 @@
         .exh-mini-fallback h3 { color: #0f172a; }
         .exh-mini-foot { border-top-color: #e2e8f0; color: #64748b; }
         .exh-mini-foot a { color: #334155; }
+        .exh-mini-origin { border-top-color: #e2e8f0; }
+        .exh-mini-origin-link { color: #1d4ed8; }
+        .exh-mini-origin-link:hover { color: #1e40af; }
       }
     `;
     const tag = document.createElement('style');
@@ -328,28 +365,58 @@
     while (mount.firstChild) mount.removeChild(mount.firstChild);
 
     const archiveUrl = payload.a || payload.u || '';
-    const textFragUrl = buildTextFragmentUrl(payload);
 
+    // Hero: the borrowed text takes center stage.
     const quoteEl = e('div', { class: 'exh-mini-quote' },
       payload.b ? e('span', { class: 'ctx' }, '…' + payload.b + ' ') : null,
-      e('mark', null, payload.t || ''),
+      e('span', { class: 'borrowed' }, payload.t || ''),
       payload.f ? e('span', { class: 'ctx' }, ' ' + payload.f + '…') : null,
     );
 
     const base = location.origin + location.pathname;
-    const head = e('div', { class: 'exh-mini-head' },
+    let currentMark = null;
+    function jumpToHighlight() {
+      if (!currentMark) return;
+      try { currentMark.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_) {}
+      try {
+        currentMark.classList.remove('flash');
+        void currentMark.offsetWidth; // restart animation
+        currentMark.classList.add('flash');
+      } catch (_) {}
+    }
+
+    const jumpBtn = e('button', { class: 'exh-mini-btn', onclick: jumpToHighlight,
+      title: 'Scroll to the borrowed span in the original',
+      style: { display: 'none' } }, '↓ Jump to text');
+
+    const bar = e('div', { class: 'exh-mini-bar' },
       e('a', { class: 'exh-mini-logo', href: base, title: 'Open DraftEO' }, '◆ DraftEO'),
-      e('div', { class: 'exh-mini-titlewrap' },
-        e('div', { class: 'exh-mini-eyebrow' }, 'Exhibit'),
-        e('div', { class: 'exh-mini-title' }, payload.l || (payload.t || '').slice(0, 80) || 'Exhibit'),
-        payload.s ? e('div', { class: 'exh-mini-source' }, 'from ', e('strong', null, payload.s)) : null,
-      ),
+      payload.s
+        ? e('div', { class: 'exh-mini-bar-source' }, 'Exhibit from ', e('strong', null, payload.s))
+        : e('div', { class: 'exh-mini-bar-source' }, 'Exhibit'),
       e('div', { class: 'exh-mini-actions' },
+        jumpBtn,
         archiveUrl
           ? e('a', { class: 'exh-mini-btn', href: archiveUrl, target: '_blank', rel: 'noopener' }, '↗ archive.org')
           : null,
         e('button', { class: 'exh-mini-btn primary', onclick: copyShareUrl }, '⧉ Copy link'),
       ),
+    );
+
+    // Prominent original-URL row when the source was a URL import. The
+    // archive.org link is the citation, but the reader usually wants the
+    // original page first.
+    const originRow = payload.o ? e('div', { class: 'exh-mini-origin' },
+      e('span', { class: 'exh-mini-origin-label' }, 'Original'),
+      e('a', { class: 'exh-mini-origin-link', href: payload.o, target: '_blank', rel: 'noopener' },
+        payload.o),
+    ) : null;
+
+    const hero = e('div', { class: 'exh-mini-hero' },
+      e('div', { class: 'exh-mini-eyebrow' }, payload.l ? 'Exhibit · ' + payload.l : 'Borrowed text'),
+      quoteEl,
+      payload.n ? e('div', { class: 'exh-mini-note' }, payload.n) : null,
+      originRow,
     );
 
     function copyShareUrl() {
@@ -368,9 +435,11 @@
       flashToast('Link copied');
     }
 
+    const divider = e('div', { class: 'exh-mini-divider' }, 'From the original document');
+
     const docHead = e('div', { class: 'exh-mini-doc-head' },
       e('span', { class: 'dot' }),
-      e('span', null, 'Loading source from archive.org…'),
+      e('span', null, 'Loading from archive.org…'),
       e('span', { class: 'exh-mini-spinner', style: { marginLeft: '6px' } }),
     );
 
@@ -378,22 +447,31 @@
       e('p', null, 'Fetching the archived document…')));
 
     const wrap = e('div', { class: 'exh-mini' },
-      head,
-      quoteEl,
-      payload.n ? e('div', { class: 'exh-mini-note' }, payload.n) : null,
+      bar,
+      hero,
+      divider,
       docHead,
       docSlot,
       e('div', { class: 'exh-mini-foot' },
         'Permanently preserved on ',
         e('a', { href: archiveUrl, target: '_blank', rel: 'noopener' }, 'archive.org'),
-        '. The span above is highlighted within the original document.',
+        '. The borrowed span is highlighted in the original above.',
       ),
     );
 
     mount.appendChild(wrap);
 
-    // ── load the document inline (with highlight) or fall back to iframe ─
-    await loadAndHighlight(payload, docSlot, docHead, textFragUrl);
+    const mark = await loadAndHighlight(payload, docSlot, docHead);
+    if (mark) {
+      currentMark = mark;
+      jumpBtn.style.display = '';
+      // Pull the page itself down to the doc area so the borrowed span is
+      // visible without the reader scrolling. Defer one tick past
+      // scrollIntoView inside the doc container.
+      setTimeout(() => {
+        try { mark.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_) {}
+      }, 250);
+    }
   }
 
   function flashToast(msg) {
@@ -410,73 +488,34 @@
     setTimeout(() => t.remove(), 2200);
   }
 
-  async function loadAndHighlight(payload, slot, head, textFragUrl) {
+  // Fetch a URL as text, trying directly first and then falling back to the
+  // n8n feed proxy when archive.org's CORS / content-type quirks block us.
+  // Returns the body string or null when both paths fail.
+  async function fetchSourceText(url) {
+    if (!url) return null;
+    try {
+      const r = await fetch(url, { credentials: 'omit' });
+      if (r.ok) return await r.text();
+    } catch (_) { /* CORS / network */ }
+    try {
+      const proxy = 'https://n8n.intelechia.com/webhook/feed?url=' + encodeURIComponent(url);
+      const r = await fetch(proxy, { credentials: 'omit' });
+      if (r.ok) return await r.text();
+    } catch (_) { /* proxy unavailable */ }
+    return null;
+  }
+
+  async function loadAndHighlight(payload, slot, head) {
     const mime = (payload.m || '').toLowerCase();
-    const isText = mime.startsWith('text/') || mime === 'application/json'
-      || mime === '' || mime === 'application/xhtml+xml';
-    const isHtml = mime === 'text/html' || mime === 'application/xhtml+xml'
+    const looksHtml = mime === 'text/html' || mime === 'application/xhtml+xml'
       || /\.html?$/i.test(payload.u || '');
+    const looksText = mime.startsWith('text/') || mime === 'application/json'
+      || mime === 'application/xhtml+xml'
+      || (mime === '' && !/\.(pdf|png|jpe?g|gif|webp|mp4|webm|mp3|wav|ogg)$/i.test(payload.u || ''));
     const isPdf = mime === 'application/pdf' || /\.pdf$/i.test(payload.u || '');
+    const isImage = mime.startsWith('image/');
+    const isMedia = mime.startsWith('video/') || mime.startsWith('audio/');
 
-    // Text/HTML: fetch and render inline. archive.org's /download/ endpoint
-    // sends Access-Control-Allow-Origin: * for most items.
-    if (isText) {
-      try {
-        const r = await fetch(payload.u);
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        const body = await r.text();
-        while (slot.firstChild) slot.removeChild(slot.firstChild);
-
-        if (isHtml) {
-          // Render the page's main content inline (sanitised) and highlight.
-          const parser = new DOMParser();
-          const parsed = parser.parseFromString(body, 'text/html');
-          parsed.querySelectorAll('script, style, noscript, iframe, link[rel="stylesheet"]').forEach(n => n.remove());
-          parsed.querySelectorAll('*').forEach((node) => {
-            for (const attr of [...node.attributes]) {
-              if (attr.name.startsWith('on')) node.removeAttribute(attr.name);
-            }
-          });
-          const main = parsed.querySelector('article, main, [role="main"]') || parsed.body || parsed.documentElement;
-          const container = e('div', { class: 'exh-mini-doc html-content' });
-          container.appendChild(main.cloneNode(true));
-          slot.appendChild(container);
-          const ok = highlightSpan(container, document, payload.t, payload.b, payload.f);
-          setStatus(head, ok ? 'ok' : 'warn',
-            ok ? 'Showing the archived document with the span highlighted'
-               : 'Showing the archived document — exact span not located, see quote above');
-        } else {
-          // Plaintext — wrap in <pre> and highlight.
-          const pre = e('pre', null, body);
-          const container = e('div', { class: 'exh-mini-doc' }, pre);
-          slot.appendChild(container);
-          const ok = highlightSpan(pre, document, payload.t, payload.b, payload.f);
-          setStatus(head, ok ? 'ok' : 'warn',
-            ok ? 'Showing the archived document with the span highlighted'
-               : 'Showing the archived document — exact span not located, see quote above');
-        }
-        return;
-      } catch (err) {
-        console.warn('[exhibit-share] inline fetch failed, falling back to iframe', err);
-      }
-    }
-
-    // Binary / fetch-blocked: iframe the file directly. PDFs render natively;
-    // images/audio/video do too. The text-fragment URL gives the browser a
-    // hint for HTML content even inside an iframe (best-effort).
-    while (slot.firstChild) slot.removeChild(slot.firstChild);
-    const iframeSrc = isHtml ? textFragUrl : payload.u;
-    const iframe = e('iframe', {
-      class: 'exh-mini-iframe',
-      src: iframeSrc,
-      referrerpolicy: 'no-referrer',
-    });
-    slot.appendChild(iframe);
-    setStatus(head, 'ok', isPdf
-      ? 'Showing the archived PDF — see the quote above for the exact span'
-      : 'Showing the archived document — see the quote above for the exact span');
-
-    // If everything failed to even point somewhere, surface a graceful fallback.
     if (!payload.u) {
       while (slot.firstChild) slot.removeChild(slot.firstChild);
       slot.appendChild(e('div', { class: 'exh-mini-fallback' },
@@ -484,7 +523,72 @@
         e('p', null, 'This exhibit isn\'t backed by an archive.org-hosted source.'),
       ));
       setStatus(head, 'warn', 'Quote shown above only');
+      return null;
     }
+
+    // HTML / text: always fetch and render inline. Iframing archive.org's
+    // raw download URL shows the source as plaintext (their stored
+    // content-type for user-uploaded HTML triggers source view), so we
+    // never iframe HTML.
+    if (looksHtml || looksText) {
+      const body = await fetchSourceText(payload.u);
+      while (slot.firstChild) slot.removeChild(slot.firstChild);
+
+      if (body === null) {
+        slot.appendChild(e('div', { class: 'exh-mini-fallback' },
+          e('h3', null, 'Could not load the archived document inline'),
+          e('p', null, 'The browser blocked the file from loading here, but the original is preserved on archive.org.'),
+          e('a', { class: 'exh-mini-btn primary', href: payload.a || payload.u, target: '_blank', rel: 'noopener' },
+            '↗ View on archive.org'),
+        ));
+        setStatus(head, 'warn', 'Could not load inline — quote shown above');
+        return null;
+      }
+
+      if (looksHtml) {
+        const parser = new DOMParser();
+        const parsed = parser.parseFromString(body, 'text/html');
+        parsed.querySelectorAll('script, style, noscript, iframe, link[rel="stylesheet"], link[rel="preload"]').forEach(n => n.remove());
+        parsed.querySelectorAll('*').forEach((node) => {
+          for (const attr of [...node.attributes]) {
+            if (attr.name.startsWith('on')) node.removeAttribute(attr.name);
+          }
+        });
+        const main = parsed.querySelector('article, main, [role="main"]') || parsed.body || parsed.documentElement;
+        const container = e('div', { class: 'exh-mini-doc html-content' });
+        container.appendChild(main.cloneNode(true));
+        slot.appendChild(container);
+        const mark = highlightSpan(container, document, payload.t, payload.b, payload.f);
+        setStatus(head, mark ? 'ok' : 'warn',
+          mark ? 'Span highlighted in the archived document'
+               : 'Archived document loaded — exact span not located');
+        return mark;
+      }
+
+      const pre = e('pre', null, body);
+      const container = e('div', { class: 'exh-mini-doc' }, pre);
+      slot.appendChild(container);
+      const mark = highlightSpan(pre, document, payload.t, payload.b, payload.f);
+      setStatus(head, mark ? 'ok' : 'warn',
+        mark ? 'Span highlighted in the archived document'
+             : 'Archived document loaded — exact span not located');
+      return mark;
+    }
+
+    // Binary: PDFs / images / audio / video iframe natively from archive.org.
+    while (slot.firstChild) slot.removeChild(slot.firstChild);
+    const iframe = e('iframe', {
+      class: 'exh-mini-iframe',
+      src: payload.u,
+      referrerpolicy: 'no-referrer',
+    });
+    slot.appendChild(iframe);
+    setStatus(head, 'ok',
+      isPdf ? 'Archived PDF · see the quote above for the exact span'
+      : isImage ? 'Archived image · see the quote above'
+      : isMedia ? 'Archived media · see the quote above'
+      : 'Archived file · see the quote above');
+    return null;
   }
 
   function setStatus(head, cls, msg) {
