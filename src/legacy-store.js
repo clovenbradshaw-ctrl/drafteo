@@ -1015,6 +1015,11 @@ export const Store = {
 
   // ── Search ──
 
+  /**
+   * Subsequence match across every source in every doc of the workspace.
+   * Returns shape: { kind: 'source', source, doc: { id, title } } so the
+   * Cmd-K overlay can render the doc name alongside the source.
+   */
   searchSourcesInWorkspace(ws_id, query) {
     if (!ws_id || !query) return [];
     const q = String(query).toLowerCase().trim();
@@ -1027,13 +1032,69 @@ export const Store = {
         const hay = (s.title + ' ' + (s.filename || '') + ' ' + (s.description || '') + ' ' + (s.tags || []).join(' ') + ' ' + (s.source_url || '')).toLowerCase();
         if (subsequenceMatch(hay, q)) {
           results.push({
-            doc_id: d.id, doc_title: d.title,
+            kind: 'source',
+            doc: { id: d.id, title: d.title },
+            doc_id: d.id, doc_title: d.title,   // legacy aliases
             source_id: s.source_id, source: s,
           });
         }
       }
     }
     return results;
+  },
+
+  /**
+   * Search every doc's title + dek + body for a substring (case-insensitive).
+   * Returns shape:
+   *   { kind: 'doc', doc: { id, title, stage }, where, snippet, match_at }
+   * Snippets are ~80 chars surrounding the first hit with the query call-out
+   * marked by [[ ]] so the renderer can highlight if it wants.
+   */
+  searchDocsInWorkspace(ws_id, query) {
+    if (!ws_id || !query) return [];
+    const q = String(query).toLowerCase().trim();
+    if (!q) return [];
+    const docs = Store.listDocuments(ws_id);
+    const results = [];
+    for (const d of docs) {
+      const title = (d.title || '').toLowerCase();
+      const dek   = (d.dek || '').toLowerCase();
+      const body  = (d.body_markdown || '').toLowerCase();
+      let where = null;
+      let matchAt = -1;
+      if (title.includes(q))     { where = 'title';    matchAt = title.indexOf(q); }
+      else if (dek.includes(q))  { where = 'standfirst'; matchAt = dek.indexOf(q); }
+      else if (body.includes(q)) { where = 'body';     matchAt = body.indexOf(q); }
+      if (where == null) continue;
+      const haystack = where === 'title' ? (d.title || '')
+                      : where === 'standfirst' ? (d.dek || '')
+                      : (d.body_markdown || '');
+      const start = Math.max(0, matchAt - 40);
+      const end   = Math.min(haystack.length, matchAt + q.length + 40);
+      const prefix = start > 0 ? '… ' : '';
+      const suffix = end < haystack.length ? ' …' : '';
+      const snippet = (prefix + haystack.slice(start, matchAt) +
+                       '[[' + haystack.slice(matchAt, matchAt + q.length) + ']]' +
+                       haystack.slice(matchAt + q.length, end) + suffix);
+      results.push({
+        kind: 'doc',
+        doc: { id: d.id, title: d.title, stage: d.stage },
+        where, snippet, match_at: matchAt,
+      });
+    }
+    return results;
+  },
+
+  /**
+   * One-shot search across docs + sources. Returns mixed results with a
+   * `kind` discriminator. Docs land first (title > standfirst > body),
+   * then sources.
+   */
+  searchWorkspace(ws_id, query) {
+    return [
+      ...Store.searchDocsInWorkspace(ws_id, query),
+      ...Store.searchSourcesInWorkspace(ws_id, query),
+    ];
   },
 
   // ── Comments (Phase 5) ──

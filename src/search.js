@@ -13,7 +13,7 @@
 
     const input = el('input', {
       type: 'text',
-      placeholder: 'Search all sources in this workspace…',
+      placeholder: 'Search drafts and sources in this workspace…',
       autocomplete: 'off',
       spellcheck: 'false',
     });
@@ -22,44 +22,78 @@
 
     function render(q) {
       clear(list);
-      const results = Store.searchSourcesInWorkspace(ws_id, q);
-      if (results.length === 0) {
-        list.appendChild(el('div.search-empty', q ? 'No sources match "' + q + '".' : 'No sources in this workspace yet.'));
+      const results = (Store.searchWorkspace || Store.searchSourcesInWorkspace).call(Store, ws_id, q);
+      if (!results || results.length === 0) {
+        list.appendChild(el('div.search-empty', q ? 'Nothing matches "' + q + '".' : 'Search across drafts and sources in this workspace.'));
         selectedIdx = -1;
         return;
       }
       selectedIdx = Math.min(selectedIdx, results.length - 1);
       if (selectedIdx < 0) selectedIdx = 0;
       results.forEach((r, i) => {
-        const s = r.source;
-        const isWeb = !!s.source_url;
-        const row = el('button.search-row' + (i === selectedIdx ? '.selected' : ''),
-          { onClick: () => { close(); pick(r); }, onMouseenter: () => { selectedIdx = i; refreshSelection(); } },
-          el('div.search-ico', isWeb ? icon('globe') : el('span', DOM.fileExt(s.mime, s.filename))),
-          el('div.search-body',
-            el('div.search-ttl', s.title || s.filename),
-            el('div.search-meta',
-              (s.archive_org_url ? '✓ Archived' : '○ Not archived'),
-              ' · ',
-              (isWeb ? (s.source_url || '') : s.filename),
-              ' · in ',
-              el('em', r.doc.title || 'Untitled'),
-            ),
-            s.description ? el('div.search-desc', s.description) : null,
-          ),
-        );
+        const row = (r.kind === 'doc') ? buildDocRow(r, i) : buildSourceRow(r, i);
         list.appendChild(row);
       });
+    }
+
+    function buildSourceRow(r, i) {
+      const s = r.source;
+      const isWeb = !!s.source_url;
+      return el('button.search-row' + (i === selectedIdx ? '.selected' : ''),
+        { onClick: () => { close(); pick(r); }, onMouseenter: () => { selectedIdx = i; refreshSelection(); } },
+        el('div.search-ico', isWeb ? icon('globe') : el('span', DOM.fileExt(s.mime, s.filename))),
+        el('div.search-body',
+          el('div.search-ttl', s.title || s.filename),
+          el('div.search-meta',
+            (s.archive_org_url ? '✓ Archived' : '○ Not archived'),
+            ' · ',
+            (isWeb ? (s.source_url || '') : s.filename),
+            ' · in ',
+            el('em', (r.doc && r.doc.title) || 'Untitled'),
+          ),
+          s.description ? el('div.search-desc', s.description) : null,
+        ),
+      );
+    }
+
+    function buildDocRow(r, i) {
+      const snippetEl = el('div.search-desc');
+      // Inject the [[match]] markers as highlighted spans so the user
+      // can see where the hit landed.
+      const parts = String(r.snippet || '').split(/\[\[(.*?)\]\]/);
+      parts.forEach((part, idx) => {
+        if (idx % 2 === 1) {
+          const mark = document.createElement('mark');
+          mark.style.cssText = 'background:rgba(196,149,106,.25);color:var(--ink);padding:0 2px;border-radius:2px;';
+          mark.textContent = part;
+          snippetEl.appendChild(mark);
+        } else if (part) {
+          snippetEl.appendChild(document.createTextNode(part));
+        }
+      });
+      return el('button.search-row' + (i === selectedIdx ? '.selected' : ''),
+        { onClick: () => { close(); pick(r); }, onMouseenter: () => { selectedIdx = i; refreshSelection(); } },
+        el('div.search-ico', icon('file-text')),
+        el('div.search-body',
+          el('div.search-ttl', (r.doc && r.doc.title) || 'Untitled draft'),
+          el('div.search-meta',
+            'Draft · matched in ', el('em', r.where || 'body'),
+            r.doc && r.doc.stage ? ' · ' + r.doc.stage : '',
+          ),
+          snippetEl,
+        ),
+      );
     }
     function refreshSelection() {
       [...list.querySelectorAll('.search-row')].forEach((r, i) => r.classList.toggle('selected', i === selectedIdx));
     }
 
     function pick(r) {
-      // Navigate the user to the doc that owns this source and switch the
-      // sidebar to the sources tab.
       if (opts.onPick) { opts.onPick(r); return; }
-      app.openDocument(ws_id, r.doc.id);
+      // Doc hits → open that doc. Source hits → open the doc that owns
+      // the source (workspace.js will land on the sources tab).
+      const targetDoc = r.doc && r.doc.id;
+      if (targetDoc) app.openDocument(ws_id, targetDoc);
     }
 
     input.addEventListener('input', () => render(input.value));
@@ -88,7 +122,7 @@
       el('div.search-foot',
         el('span', '↑↓ navigate'),
         el('span', '↵ open'),
-        el('span', 'Fuzzy match across title, filename, URL, tags'),
+        el('span', 'Drafts (title / standfirst / body) + sources (title / filename / URL / tags)'),
       ),
     );
     scrim.appendChild(modal);
