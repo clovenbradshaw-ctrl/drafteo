@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="10" fill="#f4ecd8"/>
+  <text x="32" y="48" text-anchor="middle"
+        font-family="'Fraunces','Georgia',serif"
+        font-weight="600" font-size="48"
+        fill="#b86616">D</text>
+  <rect x="46" y="42" width="6" height="6" rx="1" fill="#b86616"/>
+</svg>
