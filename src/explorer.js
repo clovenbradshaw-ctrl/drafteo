@@ -503,7 +503,22 @@
               'The binary isn\'t in the media store and the source isn\'t archived yet. Preserve to archive.org or open the original above.'),
           ));
         } else if (isPdf) {
-          frame.appendChild(el('iframe.expl-bin-iframe', { src: inlineUrl }));
+          // pdf.js text layer: real selectable text overlay. Selections
+          // trigger attachSelectionListener just like text sources.
+          if (window.PdfRender && window.PdfRender.render) {
+            const pdfHost = el('div.expl-pdf-host');
+            frame.appendChild(pdfHost);
+            window.PdfRender.render(pdfHost, inlineUrl).then(() => {
+              if (reqRec !== activeRec) return;
+              attachSelectionListener(pdfHost);
+            }).catch((e) => {
+              console.warn('[explorer] PdfRender failed, falling back to iframe', e);
+              pdfHost.remove();
+              frame.appendChild(el('iframe.expl-bin-iframe', { src: inlineUrl }));
+            });
+          } else {
+            frame.appendChild(el('iframe.expl-bin-iframe', { src: inlineUrl }));
+          }
         } else if (isImage) {
           frame.appendChild(el('div.expl-img-wrap',
             el('img.expl-img', { src: inlineUrl, alt: s.title || s.filename || '' })));
@@ -565,10 +580,14 @@
         const text = sel.toString().trim();
         if (!text) return;
         let charStart = null, charEnd = null;
+        let page = null;
         try {
           const range = sel.getRangeAt(0);
           charStart = charOffsetIn(host, range.startContainer, range.startOffset);
           charEnd = charOffsetIn(host, range.endContainer, range.endOffset);
+          if (window.PdfRender && window.PdfRender.pageOf) {
+            page = window.PdfRender.pageOf(range.startContainer);
+          }
         } catch (_) {}
         const full = host.textContent || '';
         let before = '', after = '';
@@ -576,7 +595,7 @@
           before = full.slice(Math.max(0, charStart - 120), charStart);
           after = full.slice(charEnd, charEnd + 120);
         }
-        captured = { text, charStart, charEnd, before, after };
+        captured = { text, charStart, charEnd, before, after, page };
         renderRight();
       }
       host.addEventListener('mouseup', onChange);
@@ -613,6 +632,8 @@
         type: 'text',
         placeholder: 'Page or location (optional) — e.g. p. 12',
       });
+      // Auto-fill page when the grab came from a pdf.js text layer span.
+      if (captured.page) pageInp.value = 'p. ' + captured.page;
 
       rightPane.appendChild(el('label.expl-right-lbl', 'Page / location'));
       rightPane.appendChild(pageInp);
