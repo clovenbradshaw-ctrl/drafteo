@@ -113,7 +113,9 @@ function waitForSync(c, timeoutMs = 60000) {
         // Surface auth failures immediately; transient errors retry on
         // their own and the SDK will move back to RECONNECTING/SYNCING.
         if (err.httpStatus === 401 || err.httpStatus === 403 ||
-            err.errcode === 'M_UNKNOWN_TOKEN') {
+            err.errcode === 'M_UNKNOWN_TOKEN' ||
+            err.errcode === 'M_MISSING_TOKEN' ||
+            err.errcode === 'M_FORBIDDEN') {
           cleanup();
           reject(new Error('Session expired — please log in again'));
         }
@@ -328,9 +330,19 @@ export async function login(homeserver, username, password) {
   });
 
   // Step 4: crypto. Uses retry logic so a stale IndexedDB store from a
-  // previous device doesn't block login permanently.
+  // previous device doesn't block login permanently. If crypto init still
+  // fails after the retry, scrub the just-saved session + crypto store so
+  // the user's next attempt starts from a clean slate instead of the
+  // "wipe cache to log in" trap.
   progress('Initializing encryption…');
-  await initCryptoWithRetry(client);
+  try {
+    await initCryptoWithRetry(client);
+  } catch (e) {
+    try { await clearCryptoStore(); } catch {}
+    localStorage.removeItem('mx_session');
+    client = null;
+    throw e;
+  }
 
   // Step 5: sync.
   progress('Starting sync…');
@@ -372,8 +384,15 @@ export async function restoreSession() {
     await waitForSync(client);
 
     // Restore-only path: no password, so first-time bootstrap is skipped.
+    // Bounded — the SDK can sit forever waiting on a secret-storage
+    // callback if the user dismisses the recovery-key modal, and that
+    // would freeze the whole app shell behind Store.ready().
     try {
-      await ensureEncryptionSetUp({ userMxid: userId, password: null });
+      await withTimeout(
+        ensureEncryptionSetUp({ userMxid: userId, password: null }),
+        45000,
+        'Encryption restore'
+      );
     } catch (e) {
       progress(`Encryption restore failed: ${e.message}`);
     }
@@ -381,18 +400,34 @@ export async function restoreSession() {
     return client;
   } catch (e) {
     console.warn('[matrix] session restore failed:', e);
-    // Only wipe the saved session when the homeserver has actually
-    // rejected the token. Transient failures (sync timeout, slow wasm
-    // load, IndexedDB hiccup, recovery-key modal dismissed) leave the
-    // credentials intact so the next reload retries instead of forcing
-    // a fresh login and a new device id.
-    const msg = String(e && e.message || '');
-    const fatal = msg.includes('Session expired') ||
-                  msg.includes('Access token rejected') ||
-                  e?.httpStatus === 401 ||
-                  e?.errcode === 'M_UNKNOWN_TOKEN';
-    if (fatal) {
+    // Wipe the saved session whenever the homeserver has rejected the
+    // token in any of its forms, or the crypto store is unrecoverable.
+    // Leaving a bad mx_session in place produced the "wipe cache to log
+    // in" trap: every reload re-hits the same failure and the user
+    // never reaches a usable login form.
+    const msg = String(e && e.message || '').toLowerCase();
+    const status = e?.httpStatus;
+    const errcode = e?.errcode;
+    const tokenRejected =
+      status === 401 || status === 403 ||
+      errcode === 'M_UNKNOWN_TOKEN' ||
+      errcode === 'M_MISSING_TOKEN' ||
+      errcode === 'M_FORBIDDEN' ||
+      msg.includes('session expired') ||
+      msg.includes('access token') ||
+      msg.includes('invalid token') ||
+      msg.includes('unknown token');
+    const cryptoBroken =
+      msg.includes("account in the store doesn't match") ||
+      msg.includes('account in the store does not match') ||
+      msg.includes('crypto init') ||
+      msg.includes('olm') ||
+      msg.includes('indexeddb');
+    if (tokenRejected || cryptoBroken) {
       localStorage.removeItem('mx_session');
+      if (cryptoBroken) {
+        try { await clearCryptoStore(); } catch {}
+      }
     }
     client = null;
     return null;
