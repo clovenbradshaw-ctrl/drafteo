@@ -525,7 +525,7 @@ export const Store = {
       uploaded_at: Date.now(),
       mxc_uri: mxc,
       encryption_info: info,
-      source_url: null,
+      source_url: patch?.source_url || null,
       description: patch?.description || '',
       tags: Array.isArray(patch?.tags) ? patch.tags : [],
       hidden: false,

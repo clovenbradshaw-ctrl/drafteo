@@ -263,7 +263,7 @@
           ? el('button.ghost', { disabled: true, style: { color: 'var(--ok)' } }, 'PRESERVED ✓')
           : el('button.primary', { onClick: () => openArchiveModal(doc_id, s, ed) }, 'PRESERVE →'),
         opts.hiddenSection
-          ? el('div', { style: { display: 'flex', gap: '6px' } },
+          ? [
               el('button.ghost', { onClick: async () => { await Store.hideSource(doc_id, s.source_id, false); ed.refreshSources(); }, title: 'Restore from bin' }, 'RESTORE'),
               archived
                 ? el('button.ghost', { disabled: true, title: 'Archive.org is permanent', style: { color: 'var(--ink-faint)' } }, 'PERMANENT')
@@ -277,7 +277,7 @@
                     await Store.deleteSource(doc_id, s.source_id);
                     ed.refreshSources();
                   }, style: { color: 'var(--err)' } }, 'DELETE FOREVER'),
-            )
+            ]
           : el('button.ghost', { onClick: async () => {
               // Toss always moves to bin (soft delete). Recoverable from the Bin section.
               await Store.hideSource(doc_id, s.source_id, true);
