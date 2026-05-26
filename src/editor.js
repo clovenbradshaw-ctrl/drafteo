@@ -293,7 +293,13 @@
     selToolbar.appendChild(el('button', { title: 'Bulleted list', onMousedown: (e) => { e.preventDefault(); exec('insertUnorderedList'); } }, icon('list-bullets')));
     selToolbar.appendChild(el('button', { title: 'Numbered list', onMousedown: (e) => { e.preventDefault(); exec('insertOrderedList'); } }, icon('list-numbers')));
     selToolbar.appendChild(el('button', { title: 'Blockquote', onMousedown: (e) => { e.preventDefault(); block('BLOCKQUOTE'); } }, icon('quotes')));
-    selToolbar.appendChild(el('button', { title: 'Link', onMousedown: (e) => { e.preventDefault(); const u = prompt('Link URL'); if (u) exec('createLink', u); } }, icon('link')));
+    selToolbar.appendChild(el('button', { title: 'Link', onMousedown: (e) => {
+      e.preventDefault();
+      const sel = window.getSelection();
+      const range = (sel && sel.rangeCount && !sel.isCollapsed) ? sel.getRangeAt(0).cloneRange() : null;
+      const text = sel ? sel.toString() : '';
+      openLinkModal({ range, text });
+    } }, icon('link')));
     selToolbar.appendChild(el('div.sep'));
     selToolbar.appendChild(el('button.accent', { title: 'Cite from exhibits', onMousedown: (e) => { e.preventDefault(); openCitePicker(); } }, icon('quotes'), el('span', ' Cite')));
     selToolbar.appendChild(el('button.accent', { title: 'Save selection as cited text from new exhibit (URL snapshot)', onMousedown: (e) => { e.preventDefault(); openGrabFromUrl(); } }, icon('link-simple'), el('span', ' From URL')));
@@ -325,6 +331,230 @@
       placeSelToolbar();
     });
     page.parentElement.addEventListener('scroll', placeSelToolbar, { passive: true });
+
+    // Link insert/edit modal. Used both for fresh links from a selection
+    // and for editing/replacing/removing existing links (including ones
+    // pasted in from the clipboard). Also exposes the workspace's sources
+    // so a plain link can become an exhibit URL or a tracked citation.
+    function openLinkModal(opts) {
+      opts = opts || {};
+      const isEdit = !!opts.existingLink;
+      const liveRange = opts.range || null;
+      const initialUrl = isEdit ? (opts.existingLink.getAttribute('href') || '') : '';
+      const initialText = isEdit
+        ? (opts.existingLink.textContent || '')
+        : (opts.text || '');
+      const sources = Store.listSources(doc_id);
+
+      const scrim = el('div.scrim', { onClick: (e) => { if (e.target === scrim) scrim.remove(); } });
+      const urlInput = el('input', { type: 'url', placeholder: 'https://example.com', value: initialUrl });
+      const textInput = el('input', { type: 'text', placeholder: 'Link text', value: initialText });
+      const searchInp = el('input', { type: 'text', placeholder: 'Filter exhibits by title, URL, tag…' });
+      const sourceList = el('div.link-srclist');
+
+      function renderSources(q) {
+        clear(sourceList);
+        const needle = (q || '').trim().toLowerCase();
+        const filtered = sources.filter((s) => {
+          if (!needle) return true;
+          const hay = [s.title, s.filename, s.source_url, s.archive_org_url, (s.tags || []).join(' ')].filter(Boolean).join(' ').toLowerCase();
+          return hay.includes(needle);
+        });
+        if (filtered.length === 0) {
+          sourceList.appendChild(el('div.link-src-empty',
+            sources.length === 0
+              ? 'No exhibits in this draft yet. Add one from the right rail.'
+              : 'No exhibits match.'));
+          return;
+        }
+        for (const s of filtered) {
+          const targetUrl = s.archive_org_url || s.source_url || '';
+          const isArchived = !!s.archive_org_url;
+          const row = el('div.link-src-row',
+            el('div.link-src-meta',
+              el('i.ph.ph-' + (isArchived ? 'link-simple' : 'warning-circle'), { style: { color: isArchived ? 'var(--ok)' : 'var(--warn)' } }),
+              el('div.link-src-text',
+                el('div.link-src-title', s.title || s.filename),
+                el('div.link-src-sub', targetUrl || '— no URL yet'),
+              ),
+            ),
+            el('div.link-src-actions',
+              el('button.ghost', {
+                type: 'button',
+                title: 'Set this exhibit\'s URL as the link target',
+                onClick: () => {
+                  if (!targetUrl) { DOM.toast('NO URL', 'This exhibit has no URL yet.', 2200); return; }
+                  urlInput.value = targetUrl;
+                  if (!textInput.value.trim()) textInput.value = s.title || s.filename || targetUrl;
+                  urlInput.focus();
+                },
+              }, 'Use URL'),
+              el('button.primary', {
+                type: 'button',
+                title: 'Insert a tracked citation (numbered footnote) instead of a plain link',
+                onClick: () => convertToCitation(s),
+              }, 'Cite →'),
+            ),
+          );
+          sourceList.appendChild(row);
+        }
+      }
+
+      function convertToCitation(s) {
+        const text = textInput.value.trim() || initialText || (s.title || s.filename || '');
+        let citeRange;
+        if (isEdit) {
+          // Replace the existing <a> with a text node, then build a range over it.
+          const a = opts.existingLink;
+          const tn = document.createTextNode(a.textContent);
+          a.replaceWith(tn);
+          citeRange = document.createRange();
+          citeRange.selectNodeContents(tn);
+        } else if (liveRange) {
+          citeRange = liveRange;
+        } else {
+          DOM.toast('NO SELECTION', 'Select text first to attach a citation.', 2400);
+          return;
+        }
+        attachCitation(citeRange, s.source_id, text);
+        scrim.remove();
+      }
+
+      function save() {
+        const url = urlInput.value.trim();
+        if (!url) { urlInput.focus(); return; }
+        const text = textInput.value.trim();
+        if (isEdit) {
+          const a = opts.existingLink;
+          a.setAttribute('href', url);
+          a.target = '_blank';
+          a.rel = 'noopener';
+          if (text && text !== a.textContent) a.textContent = text;
+        } else if (liveRange) {
+          const a = document.createElement('a');
+          a.href = url;
+          a.target = '_blank';
+          a.rel = 'noopener';
+          if (!liveRange.collapsed) {
+            try {
+              const frag = liveRange.extractContents();
+              a.appendChild(frag);
+              if (text && a.textContent !== text) a.textContent = text;
+              liveRange.insertNode(a);
+            } catch (_) {
+              a.textContent = text || url;
+              liveRange.insertNode(a);
+            }
+          } else {
+            a.textContent = text || url;
+            liveRange.insertNode(a);
+          }
+          const sel = window.getSelection();
+          const r = document.createRange();
+          r.setStartAfter(a); r.collapse(true);
+          sel.removeAllRanges(); sel.addRange(r);
+        } else {
+          // No range: append at end of body.
+          const a = document.createElement('a');
+          a.href = url;
+          a.target = '_blank';
+          a.rel = 'noopener';
+          a.textContent = text || url;
+          body.appendChild(a);
+        }
+        scrim.remove();
+        markDirty();
+      }
+
+      function removeLink() {
+        if (!isEdit) return;
+        const a = opts.existingLink;
+        const tn = document.createTextNode(a.textContent);
+        a.replaceWith(tn);
+        scrim.remove();
+        markDirty();
+      }
+
+      searchInp.addEventListener('input', () => renderSources(searchInp.value));
+      urlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+      textInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+      renderSources('');
+
+      const footLeft = isEdit
+        ? el('button.ghost', { onClick: removeLink, title: 'Unlink — keep the text, drop the link', style: { color: 'var(--err)' } }, icon('link-break', 12), ' Remove link')
+        : el('span');
+
+      const modal = el('div.modal', { style: { width: 'min(620px, 96vw)' }, onClick: (e) => e.stopPropagation() },
+        el('div.m-head',
+          el('div',
+            el('div.ttl', isEdit ? 'Edit link' : 'Insert link'),
+            el('div.sub', isEdit
+              ? 'Change the URL or text, remove the link, or convert it to a tracked citation.'
+              : 'Type a URL, or pick an exhibit below to link to (or cite from).'),
+          ),
+          el('button.ghost', { onClick: () => scrim.remove() }, '✕'),
+        ),
+        el('div.m-body',
+          el('label', 'URL'),
+          urlInput,
+          el('label', 'Link text'),
+          textInput,
+          el('label', { style: { marginTop: '10px' } }, 'Or pick an exhibit'),
+          searchInp,
+          sourceList,
+        ),
+        el('div.m-foot',
+          footLeft,
+          el('div.actions',
+            el('button.ghost', { onClick: () => scrim.remove() }, 'Cancel'),
+            el('button.primary', { onClick: save }, isEdit ? 'Save' : 'Insert link'),
+          ),
+        ),
+      );
+      scrim.appendChild(modal);
+      document.body.appendChild(scrim);
+      setTimeout(() => (initialUrl ? urlInput : (initialText ? urlInput : urlInput)).focus(), 60);
+    }
+
+    // Small floating popover that appears on click of an existing <a> in
+    // the body. Quick actions only; "Edit" opens the full modal.
+    let linkPopover = null;
+    function closeLinkPopover() { if (linkPopover) { linkPopover.remove(); linkPopover = null; } }
+    function showLinkPopover(a) {
+      closeLinkPopover();
+      const url = a.getAttribute('href') || '';
+      const display = url ? (url.length > 56 ? url.slice(0, 56) + '…' : url) : '(no URL)';
+      const pop = el('div.link-popover',
+        el('a.link-pv-url', {
+          href: url || '#', target: '_blank', rel: 'noopener', title: url,
+          onClick: (e) => { if (!url) { e.preventDefault(); } },
+        }, display),
+        el('div.sep'),
+        el('button.link-pv-btn', {
+          title: 'Edit link', onClick: () => { closeLinkPopover(); openLinkModal({ existingLink: a }); },
+        }, icon('pencil-simple', 12), ' Edit'),
+        el('button.link-pv-btn', {
+          title: 'Remove link (keep the text)',
+          onClick: () => {
+            const tn = document.createTextNode(a.textContent);
+            a.replaceWith(tn);
+            closeLinkPopover();
+            markDirty();
+          },
+        }, icon('link-break', 12), ' Unlink'),
+      );
+      pop.addEventListener('mousedown', (e) => e.stopPropagation());
+      document.body.appendChild(pop);
+      const rect = a.getBoundingClientRect();
+      pop.style.left = Math.max(8, rect.left) + 'px';
+      pop.style.top = (rect.bottom + window.scrollY + 6) + 'px';
+      linkPopover = pop;
+    }
+    document.addEventListener('mousedown', (e) => {
+      if (linkPopover && !linkPopover.contains(e.target) && !(e.target.closest && e.target.closest('a'))) {
+        closeLinkPopover();
+      }
+    });
 
     function openCitePicker() {
       const sel = window.getSelection();
@@ -1198,6 +1428,18 @@
     body.addEventListener('click', (e) => {
       const c = e.target.closest && e.target.closest('.commented');
       if (c) flashGutter(c.dataset.anchor);
+      const a = e.target.closest && e.target.closest('a');
+      if (a && body.contains(a)) {
+        // Cmd/Ctrl-click follows the link in a new tab; bare click opens
+        // the inline edit popover so users can change the URL or unlink.
+        if (e.metaKey || e.ctrlKey) {
+          if (a.href) window.open(a.href, '_blank', 'noopener');
+          return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        showLinkPopover(a);
+      }
     });
 
     function flashGutter(anchor) {
