@@ -280,6 +280,7 @@
 }
 .srcv-text {
   flex: 1;
+  min-width: 0;
   font-family: var(--mono);
   font-size: 12px;
   line-height: 1.6;
@@ -291,6 +292,22 @@
   background: var(--surface);
   overflow: auto;
 }
+
+/* Readable view — serif prose column with paragraph spacing. */
+.srcv-text.dechrome {
+  font-family: var(--serif, Georgia, serif);
+  font-size: 15px;
+  line-height: 1.7;
+  padding: 32px 36px;
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+.srcv-text.dechrome .srcv-para {
+  margin: 0 auto 14px;
+  max-width: 720px;
+}
+.srcv-text.dechrome .srcv-para:last-child { margin-bottom: 0; }
 .srcv-empty {
   flex: 1;
   display: flex; flex-direction: column;

@@ -251,9 +251,23 @@
             const renderPre = (txt) => {
               const out = which === 'readable' ? dechrome(txt) : txt;
               if (!out) { slot.appendChild(el('div.srcv-empty', 'No text could be extracted.')); return; }
-              const pre = el('pre.srcv-text.' + (which === 'readable' ? 'dechrome' : 'fullchrome'), out);
-              slot.appendChild(pre);
-              attachQuoteToolbar(pre);
+              // Readable view: render each line as a paragraph in a serif
+              // prose column. Raw view: keep mono pre for fidelity.
+              if (which === 'readable') {
+                const wrap = el('div.srcv-text.dechrome');
+                const lines = out.split(/\n+/);
+                for (const l of lines) {
+                  const t = l.trim();
+                  if (!t) continue;
+                  wrap.appendChild(el('p.srcv-para', t));
+                }
+                slot.appendChild(wrap);
+                attachQuoteToolbar(wrap);
+              } else {
+                const pre = el('pre.srcv-text.fullchrome', out);
+                slot.appendChild(pre);
+                attachQuoteToolbar(pre);
+              }
             };
             if (cachedText) {
               renderPre(cachedText);
@@ -293,9 +307,21 @@
           const render = (txt) => {
             const out = which === 'readable' ? dechrome(txt) : txt;
             if (!out) { slot.appendChild(el('div.srcv-empty', 'No content.')); return; }
-            const pre = el('pre.srcv-text.' + (which === 'readable' ? 'dechrome' : 'fullchrome'), out);
-            slot.appendChild(pre);
-            attachQuoteToolbar(pre);
+            if (which === 'readable') {
+              const wrap = el('div.srcv-text.dechrome');
+              const lines = out.split(/\n+/);
+              for (const l of lines) {
+                const t = l.trim();
+                if (!t) continue;
+                wrap.appendChild(el('p.srcv-para', t));
+              }
+              slot.appendChild(wrap);
+              attachQuoteToolbar(wrap);
+            } else {
+              const pre = el('pre.srcv-text.fullchrome', out);
+              slot.appendChild(pre);
+              attachQuoteToolbar(pre);
+            }
           };
           if (cachedRaw != null) {
             render(cachedRaw);

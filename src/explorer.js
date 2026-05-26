@@ -116,7 +116,8 @@
     return parts.join(' ');
   }
 
-  // Render plaintext into a host with <mark> spans wrapping query hits.
+  // Render plaintext into a host as serif prose paragraphs (one <p> per
+  // non-empty line of the source) with <mark> spans wrapping query hits.
   // Returns { hits: [<mark>...], textLen } so callers can navigate them.
   function renderWithHits(host, text, query) {
     clear(host);
@@ -125,21 +126,28 @@
       host.appendChild(el('div.expl-empty-inline', 'No text extracted for this source.'));
       return { hits, textLen: 0 };
     }
-    if (!query) {
-      host.appendChild(document.createTextNode(text));
-      return { hits, textLen: text.length };
-    }
-    const q = query.toLowerCase();
-    const lower = text.toLowerCase();
-    let i = 0;
-    while (i < text.length) {
-      const idx = lower.indexOf(q, i);
-      if (idx < 0) { host.appendChild(document.createTextNode(text.slice(i))); break; }
-      if (idx > i) host.appendChild(document.createTextNode(text.slice(i, idx)));
-      const m = el('mark.expl-hit', text.slice(idx, idx + q.length));
-      host.appendChild(m);
-      hits.push(m);
-      i = idx + q.length;
+    const q = query ? query.toLowerCase() : '';
+    const paragraphs = text.split(/\n+/);
+    for (const para of paragraphs) {
+      const trimmed = para.trim();
+      if (!trimmed) continue;
+      const p = el('p.expl-para');
+      if (!q) {
+        p.appendChild(document.createTextNode(trimmed));
+      } else {
+        const lower = trimmed.toLowerCase();
+        let i = 0;
+        while (i < trimmed.length) {
+          const idx = lower.indexOf(q, i);
+          if (idx < 0) { p.appendChild(document.createTextNode(trimmed.slice(i))); break; }
+          if (idx > i) p.appendChild(document.createTextNode(trimmed.slice(i, idx)));
+          const m = el('mark.expl-hit', trimmed.slice(idx, idx + q.length));
+          p.appendChild(m);
+          hits.push(m);
+          i = idx + q.length;
+        }
+      }
+      host.appendChild(p);
     }
     return { hits, textLen: text.length };
   }
@@ -223,7 +231,7 @@
     // ── Elements ──
     const queryInput = el('input.expl-search-inp', {
       type: 'text',
-      placeholder: 'Filter sources by name, URL, tag, draft…',
+      placeholder: 'Search by name, URL, tag, or text inside any source…',
       spellcheck: 'false',
       autocomplete: 'off',
     });
@@ -257,41 +265,135 @@
 
     const rightPane = el('div.expl-right');
 
+    // ── Cross-source body search ──
+    // Scans the cached plaintext of every source for substring matches.
+    // Only sources that already have plaintext (web snapshots, text files,
+    // anything previously opened in the explorer) participate — binary
+    // formats without a cached extraction are skipped.
+    function searchBodies(q) {
+      if (!q || q.length < 2) return [];
+      const needle = q.toLowerCase();
+      const hits = [];
+      for (const r of allRecs) {
+        const text = r.source.plaintext || textCache.get(r.source_id);
+        if (!text) continue;
+        const lower = text.toLowerCase();
+        const idx = lower.indexOf(needle);
+        if (idx < 0) continue;
+        // Count remaining hits cheaply (no need to materialize them all)
+        let count = 1;
+        let from = idx + needle.length;
+        while (count < 99) {
+          const next = lower.indexOf(needle, from);
+          if (next < 0) break;
+          count++;
+          from = next + needle.length;
+        }
+        const before = text.slice(Math.max(0, idx - 60), idx);
+        const match = text.slice(idx, idx + needle.length);
+        const after = text.slice(idx + needle.length, idx + needle.length + 100);
+        hits.push({ rec: r, idx, before, match, after, count });
+      }
+      return hits;
+    }
+
     // ── Build list ──
     function renderList() {
       clear(listEl);
-      if (visibleRecs.length === 0) {
+      const q = (queryInput.value || '').trim();
+      const bodyHits = q ? searchBodies(q) : [];
+      const metaIds = new Set(visibleRecs.map(r => r.source_id));
+      const bodyOnly = bodyHits.filter(h => !metaIds.has(h.rec.source_id));
+
+      if (visibleRecs.length === 0 && bodyOnly.length === 0) {
         listEl.appendChild(el('div.expl-list-empty',
           allRecs.length === 0 ? 'No sources in this workspace yet.' : 'No sources match.',
         ));
         listSummary.textContent = allRecs.length === 0 ? '0 sources' : '0 of ' + allRecs.length + ' shown';
         return;
       }
-      listSummary.textContent = visibleRecs.length === allRecs.length
+
+      const summaryParts = [];
+      summaryParts.push(visibleRecs.length === allRecs.length
         ? visibleRecs.length + ' source' + (visibleRecs.length === 1 ? '' : 's')
-        : visibleRecs.length + ' of ' + allRecs.length + ' shown';
-      for (const r of visibleRecs) {
-        const s = r.source;
-        const isWeb = !!s.source_url;
-        const isActive = activeRec && activeRec.source_id === r.source_id;
-        const row = el('button.expl-row' + (isActive ? '.active' : ''),
-          { type: 'button', onClick: () => selectRec(r) },
-          el('div.expl-row-ico' + (isWeb ? '.web' : ''),
-            isWeb ? icon('globe') : el('span', DOM.fileExt(s.mime, s.filename))),
-          el('div.expl-row-body',
-            el('div.expl-row-ttl', s.title || s.filename || 'Untitled source'),
-            el('div.expl-row-meta',
-              s.archive_org_url ? el('span.expl-pill.ok', icon('check-circle', 10), ' archived')
-                : (s.source_url ? el('span.expl-pill.warn', icon('globe', 10), ' web')
-                  : el('span.expl-pill.mute', icon('file', 10), ' local')),
-              el('span.expl-row-dot', '·'),
-              el('span.expl-row-doc', r.doc.title || 'Untitled draft'),
-            ),
-            s.description ? el('div.expl-row-desc', s.description) : null,
-          ),
-        );
-        listEl.appendChild(row);
+        : visibleRecs.length + ' of ' + allRecs.length);
+      if (bodyHits.length > 0) {
+        summaryParts.push('· ' + bodyHits.length + ' text hit' + (bodyHits.length === 1 ? '' : 's'));
       }
+      listSummary.textContent = summaryParts.join(' ');
+
+      // Metadata matches first
+      if (visibleRecs.length > 0) {
+        if (q && bodyHits.length > 0) {
+          listEl.appendChild(el('div.expl-list-section', 'Sources'));
+        }
+        for (const r of visibleRecs) {
+          const bh = bodyHits.find(h => h.rec.source_id === r.source_id);
+          listEl.appendChild(buildSourceRow(r, q, bh));
+        }
+      }
+
+      // Sources whose only match is in body text
+      if (bodyOnly.length > 0) {
+        listEl.appendChild(el('div.expl-list-section', 'In source text'));
+        for (const h of bodyOnly) {
+          listEl.appendChild(buildBodyHitRow(h, q));
+        }
+      }
+    }
+
+    function buildSourceRow(r, q, bodyHit) {
+      const s = r.source;
+      const isWeb = !!s.source_url;
+      const isActive = activeRec && activeRec.source_id === r.source_id;
+      return el('button.expl-row' + (isActive ? '.active' : ''),
+        { type: 'button', onClick: () => selectRec(r, { findQuery: bodyHit ? q : '' }) },
+        el('div.expl-row-ico' + (isWeb ? '.web' : ''),
+          isWeb ? icon('globe') : el('span', DOM.fileExt(s.mime, s.filename))),
+        el('div.expl-row-body',
+          el('div.expl-row-ttl', s.title || s.filename || 'Untitled source'),
+          el('div.expl-row-meta',
+            s.archive_org_url ? el('span.expl-pill.ok', icon('check-circle', 10), ' archived')
+              : (s.source_url ? el('span.expl-pill.warn', icon('globe', 10), ' web')
+                : el('span.expl-pill.mute', icon('file', 10), ' local')),
+            el('span.expl-row-dot', '·'),
+            el('span.expl-row-doc', r.doc.title || 'Untitled draft'),
+            bodyHit ? el('span.expl-row-dot', '·') : null,
+            bodyHit ? el('span.expl-row-bodyhit',
+              icon('text-aa', 10), ' ' + bodyHit.count + ' in text') : null,
+          ),
+          bodyHit ? el('div.expl-row-snippet',
+            bodyHit.before ? el('span.expl-row-ctx', '…' + bodyHit.before) : null,
+            el('span.expl-row-hit', bodyHit.match),
+            el('span.expl-row-ctx', bodyHit.after + '…'),
+          ) : (s.description ? el('div.expl-row-desc', s.description) : null),
+        ),
+      );
+    }
+
+    function buildBodyHitRow(h, q) {
+      const r = h.rec;
+      const s = r.source;
+      const isWeb = !!s.source_url;
+      const isActive = activeRec && activeRec.source_id === r.source_id;
+      return el('button.expl-row.expl-row-bodyonly' + (isActive ? '.active' : ''),
+        { type: 'button', onClick: () => selectRec(r, { findQuery: q }) },
+        el('div.expl-row-ico' + (isWeb ? '.web' : ''),
+          isWeb ? icon('globe') : el('span', DOM.fileExt(s.mime, s.filename))),
+        el('div.expl-row-body',
+          el('div.expl-row-ttl', s.title || s.filename || 'Untitled source'),
+          el('div.expl-row-meta',
+            el('span.expl-row-bodyhit', icon('text-aa', 10), ' ' + h.count + ' in text'),
+            el('span.expl-row-dot', '·'),
+            el('span.expl-row-doc', r.doc.title || 'Untitled draft'),
+          ),
+          el('div.expl-row-snippet',
+            h.before ? el('span.expl-row-ctx', '…' + h.before) : null,
+            el('span.expl-row-hit', h.match),
+            el('span.expl-row-ctx', h.after + '…'),
+          ),
+        ),
+      );
     }
 
     // ── Build middle pane for active source ──
@@ -309,6 +411,7 @@
       const s = activeRec.source;
       const isWeb = !!s.source_url;
       const url = canonicalCitationUrl(s);
+      const archiving = !!(window.__archivingSources && window.__archivingSources[activeRec.source_id]);
 
       // Header: title + action chips
       middleHead.appendChild(el('div.expl-mid-id',
@@ -323,45 +426,94 @@
             url ? el('span.expl-mid-dot', '·') : null,
             url ? el('a.expl-mid-link', { href: url, target: '_blank', rel: 'noopener' },
                     s.archive_org_url ? 'archive.org' : 'original') : null,
+            archiving ? el('span.expl-mid-dot', '·') : null,
+            archiving ? el('span.expl-mid-archiving',
+              el('span.expl-mid-spin'),
+              (window.__archivingSources[activeRec.source_id].label || 'Archiving…')) : null,
           ),
         ),
       ));
-      middleHead.appendChild(el('div.expl-mid-actions',
-        el('button.expl-chip', {
-          onClick: () => openInTab(activeRec),
-          title: 'Open this source in a full tab',
-        }, icon('arrow-square-out', 12), ' Open tab'),
-      ));
+
+      const actions = el('div.expl-mid-actions');
+      // Archive button — only when not yet archived, not currently archiving,
+      // and the SourcePanel archive flow is loaded.
+      if (!s.archive_org_url && !archiving && window.SourcePanel && window.SourcePanel.openArchive) {
+        actions.appendChild(el('button.expl-chip.expl-chip-primary', {
+          onClick: () => {
+            window.SourcePanel.openArchive(activeRec.doc_id, s, {
+              refreshSources: () => { try { renderMiddle(); renderList(); } catch (_) {} },
+            });
+          },
+          title: 'Preserve this source to archive.org — makes citations permanent',
+        }, icon('archive', 12), ' Preserve to archive.org'));
+      } else if (s.archive_org_url) {
+        actions.appendChild(el('a.expl-chip', {
+          href: s.archive_org_url, target: '_blank', rel: 'noopener',
+          title: 'Open on archive.org',
+        }, icon('check-circle', 12), ' archive.org'));
+      }
+      actions.appendChild(el('button.expl-chip', {
+        onClick: () => openInTab(activeRec),
+        title: 'Open this source in a full tab',
+      }, icon('arrow-square-out', 12), ' Open tab'));
+      middleHead.appendChild(actions);
 
       // Body — pick renderer by mime
       const mime = s.mime || '';
       const isPdf = mime === 'application/pdf';
-      const isMedia = mime.startsWith('image/') || mime.startsWith('audio/') || mime.startsWith('video/');
+      const isImage = mime.startsWith('image/');
+      const isAudio = mime.startsWith('audio/');
+      const isVideo = mime.startsWith('video/');
 
-      if (isPdf) {
-        middleBody.appendChild(el('div.expl-pdf-note',
-          icon('file-pdf'),
-          el('div.expl-pdf-ttl', 'PDF — paste the passage to cite'),
-          el('div.expl-pdf-sub', 'The browser\'s native PDF viewer doesn\'t share selections with the app. Use the button below to paste the passage you want to cite.'),
-          el('button.expl-chip.expl-chip-primary', {
+      if (isPdf || isImage || isAudio || isVideo) {
+        // Top bar: PDF gets the paste-cite chip (native viewer doesn't share
+        // selections); others get just an "open original" link.
+        const binBar = el('div.expl-bin-bar');
+        if (isPdf) {
+          binBar.appendChild(el('button.expl-chip.expl-chip-primary', {
             onClick: () => openPdfPaste(activeRec),
-          }, icon('scissors', 12), ' Paste & cite PDF passage'),
-          el('a.expl-chip', { href: url, target: '_blank', rel: 'noopener', style: url ? null : { display: 'none' } },
-            icon('arrow-square-out', 12), ' Open PDF in new tab'),
-        ));
-        captured = null;
-        renderRight();
-        return;
-      }
-      if (isMedia) {
-        middleBody.appendChild(el('div.expl-pdf-note',
-          icon(mime.startsWith('image/') ? 'image' : mime.startsWith('audio/') ? 'speaker-high' : 'video'),
-          el('div.expl-pdf-ttl', 'No inline text to grab'),
-          el('div.expl-pdf-sub', 'This source is binary media. Open it in a full tab to view, or cite it as a whole-source reference.'),
-          el('button.expl-chip.expl-chip-primary', {
-            onClick: () => openInTab(activeRec),
-          }, icon('arrow-square-out', 12), ' Open in tab'),
-        ));
+            title: 'The browser PDF viewer doesn\'t share selections — paste the passage in a dialog',
+          }, icon('scissors', 12), ' Paste & cite passage'));
+        }
+        if (url) {
+          binBar.appendChild(el('a.expl-chip', {
+            href: url, target: '_blank', rel: 'noopener',
+          }, icon('arrow-square-out', 12), ' Open original'));
+        }
+        const frame = el('div.expl-bin-frame', el('div.expl-empty-inline', 'Loading…'));
+        middleBody.appendChild(binBar);
+        middleBody.appendChild(frame);
+
+        const reqRec = activeRec;
+        let blobUrl = null;
+        try { blobUrl = await Store.fetchMedia(s); } catch (_) {}
+        if (reqRec !== activeRec) return;
+        const archiveDl = (s.archive_org_identifier && (s.archive_org_filename || s.filename))
+          ? 'https://archive.org/download/' + s.archive_org_identifier + '/' +
+            encodeURIComponent(s.archive_org_filename || s.filename)
+          : null;
+        const inlineUrl = blobUrl || archiveDl;
+        clear(frame);
+        if (!inlineUrl) {
+          frame.appendChild(el('div.expl-bin-empty',
+            icon('warning', 22),
+            el('div', { style: { marginTop: '8px', fontFamily: 'var(--sans)', fontSize: '13px', color: 'var(--ink-dim)' } },
+              'No local copy available.'),
+            el('div', { style: { marginTop: '4px', fontSize: '11px', color: 'var(--ink-faint)', maxWidth: '320px' } },
+              'The binary isn\'t in the media store and the source isn\'t archived yet. Preserve to archive.org or open the original above.'),
+          ));
+        } else if (isPdf) {
+          frame.appendChild(el('iframe.expl-bin-iframe', { src: inlineUrl }));
+        } else if (isImage) {
+          frame.appendChild(el('div.expl-img-wrap',
+            el('img.expl-img', { src: inlineUrl, alt: s.title || s.filename || '' })));
+        } else if (isAudio) {
+          frame.appendChild(el('div.expl-media-wrap',
+            el('audio', { src: inlineUrl, controls: 'controls' })));
+        } else if (isVideo) {
+          frame.appendChild(el('div.expl-media-wrap',
+            el('video', { src: inlineUrl, controls: 'controls' })));
+        }
         captured = null;
         renderRight();
         return;
@@ -599,11 +751,12 @@
       }
     }
 
-    function selectRec(r) {
+    function selectRec(r, selOpts) {
+      const fq = (selOpts && selOpts.findQuery) || '';
       activeRec = r;
       captured = null;
-      findInput.value = '';
-      findQuery = '';
+      findInput.value = fq;
+      findQuery = fq;
       hitMarks = [];
       activeHit = -1;
       renderList();
