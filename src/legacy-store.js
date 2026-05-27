@@ -31,6 +31,10 @@ import {
   setProgress,
   setRecoveryKeyDisplayer,
   setRecoveryKeyProvider,
+  getEncryptionStatus as fGetEncryptionStatus,
+  rotateRecoveryKey as fRotateRecoveryKey,
+  isRecoveryAckPending as fIsRecoveryAckPending,
+  acknowledgeRecoveryKey as fAcknowledgeRecoveryKey,
 } from './client.js';
 import { setNamespace, getNamespace, ins, def, eva } from './operators.js';
 import { encryptAttachment, decryptAttachment } from 'matrix-encrypt-attachment';
@@ -1136,6 +1140,37 @@ export const Store = {
         created_at: s.created_at || s._created || 0,
       }))
       .sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
+  },
+
+  // ── Encryption / recovery-key surface ──
+
+  /** Async snapshot of cross-signing + key-backup status for this account. */
+  getEncryptionStatus() {
+    return fGetEncryptionStatus();
+  },
+
+  /**
+   * Generate a new recovery key, replace the server-side 4S + key backup
+   * with one keyed by it, and trigger the "save your key" modal so the
+   * user can record the new value. Returns the new encoded key.
+   */
+  async rotateRecoveryKey() {
+    return fRotateRecoveryKey();
+  },
+
+  /** True when the user generated a recovery key but never confirmed they saved it. */
+  isRecoveryAckPending() {
+    const s = currentSession;
+    if (!s || !s.matrix_id) return false;
+    return fIsRecoveryAckPending(s.matrix_id);
+  },
+
+  /** Dismiss the "save your recovery key" reminder. */
+  acknowledgeRecoveryKey() {
+    const s = currentSession;
+    if (!s || !s.matrix_id) return;
+    fAcknowledgeRecoveryKey(s.matrix_id);
+    emit('drafteo:recovery-ack', { matrix_id: s.matrix_id });
   },
 
   // ── Misc ──
