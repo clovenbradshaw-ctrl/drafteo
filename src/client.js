@@ -179,6 +179,27 @@ async function getSecretStorageKey({ keys }) {
 
 // ── Encryption bootstrap ──
 
+// Per-user flag set the moment we generate a recovery key and cleared
+// only after the user explicitly confirms they saved it (either by
+// acknowledging the first-display modal or by clicking the reminder
+// banner / panel later). Survives reloads so a refresh mid-modal still
+// nags on next visit.
+function pendingAckKey(userMxid) {
+  return 'drafteo.recovery_pending.' + userMxid;
+}
+function markPendingAck(userMxid) {
+  try { localStorage.setItem(pendingAckKey(userMxid), '1'); } catch (_) {}
+}
+function clearPendingAck(userMxid) {
+  try { localStorage.removeItem(pendingAckKey(userMxid)); } catch (_) {}
+}
+export function isRecoveryAckPending(userMxid) {
+  try { return localStorage.getItem(pendingAckKey(userMxid)) === '1'; } catch (_) { return false; }
+}
+export function acknowledgeRecoveryKey(userMxid) {
+  clearPendingAck(userMxid);
+}
+
 // Make sure cross-signing, secret storage, and key backup are all set up
 // for this account. Called after sync on first login (when we still have
 // the password for the UIA challenge cross-signing key upload requires).
@@ -213,6 +234,8 @@ async function ensureEncryptionSetUp({ userMxid, password }) {
       progress(`Key backup restore failed: ${e.message}`);
     }
     try { await crypto.checkKeyBackupAndEnable(); } catch {}
+    // Successful restore implies the user has — and used — their key.
+    clearPendingAck(userMxid);
     return;
   }
 
@@ -245,11 +268,112 @@ async function ensureEncryptionSetUp({ userMxid, password }) {
 
   try { await crypto.checkKeyBackupAndEnable(); } catch {}
 
+  // Mark pending BEFORE the displayer so a reload mid-modal still
+  // surfaces the reminder banner on next visit.
+  markPendingAck(userMxid);
   if (recoveryKeyDisplayer && generatedKey.encodedPrivateKey) {
     await recoveryKeyDisplayer(generatedKey.encodedPrivateKey);
+    // Displayer only resolves on explicit "I've saved it" click.
+    clearPendingAck(userMxid);
   } else {
     progress(`Recovery key: ${generatedKey.encodedPrivateKey}`);
   }
+}
+
+// ── Public introspection + maintenance ──
+
+/**
+ * Snapshot of the account's encryption posture. Used by the UI to show a
+ * "your data is protected" indicator and to catch silent failures (e.g.
+ * backup was disabled, this device isn't cross-signed). Every field is
+ * best-effort — anything we can't fetch is reported as null and the
+ * caller falls back to a neutral display.
+ */
+export async function getEncryptionStatus() {
+  if (!client) return { connected: false };
+  const crypto = client.getCrypto && client.getCrypto();
+  if (!crypto) return { connected: true, cryptoReady: false };
+
+  const userMxid = client.getUserId();
+  const deviceId = client.getDeviceId?.() || null;
+
+  let crossSigningReady = false;
+  try { crossSigningReady = await crypto.isCrossSigningReady(); }
+  catch (_) {}
+
+  let crossSigningStatus = null;
+  try { crossSigningStatus = await crypto.getCrossSigningStatus(); }
+  catch (_) {}
+
+  let backupVersion = null;
+  try { backupVersion = await crypto.getActiveSessionBackupVersion(); }
+  catch (_) {}
+
+  let backupInfo = null;
+  try { backupInfo = await crypto.getKeyBackupInfo(); }
+  catch (_) {}
+
+  let sessionBackupKey = null;
+  try { sessionBackupKey = await crypto.getSessionBackupPrivateKey(); }
+  catch (_) {}
+
+  let deviceTrusted = null;
+  if (userMxid && deviceId) {
+    try {
+      const v = await crypto.getDeviceVerificationStatus(userMxid, deviceId);
+      deviceTrusted = !!(v && (v.crossSigningVerified || v.signedByOwner));
+    } catch (_) {}
+  }
+
+  return {
+    connected: true,
+    cryptoReady: true,
+    userMxid,
+    deviceId,
+    crossSigningReady,
+    crossSigningStatus,
+    backupActive: !!backupVersion,
+    backupVersion,
+    backupAlgorithm: backupInfo?.algorithm || null,
+    backupCount: backupInfo?.count ?? null,
+    backupKeyCached: !!sessionBackupKey,
+    deviceTrusted,
+    recoveryAckPending: userMxid ? isRecoveryAckPending(userMxid) : false,
+  };
+}
+
+/**
+ * Generate a fresh recovery key, re-wrap secret storage + start a new
+ * key backup under it, and display the new key. Old recovery key stops
+ * working immediately. Caller must already be online and have
+ * cross-signing populated locally (i.e. successfully logged in).
+ *
+ * Returns the new encoded recovery key on success; the displayer is
+ * also invoked with the same value so the standard "save your key"
+ * modal appears.
+ */
+export async function rotateRecoveryKey() {
+  if (!client) throw new Error('Not connected');
+  const crypto = client.getCrypto && client.getCrypto();
+  if (!crypto) throw new Error('Encryption not initialised');
+
+  const userMxid = client.getUserId();
+  progress('Rotating recovery key…');
+
+  const newKey = await crypto.createRecoveryKeyFromPassphrase();
+  await crypto.bootstrapSecretStorage({
+    createSecretStorageKey: async () => newKey,
+    setupNewKeyBackup: true,
+    setupNewSecretStorage: true,
+  });
+  try { await crypto.checkKeyBackupAndEnable(); } catch {}
+
+  if (userMxid) markPendingAck(userMxid);
+  if (recoveryKeyDisplayer && newKey.encodedPrivateKey) {
+    await recoveryKeyDisplayer(newKey.encodedPrivateKey);
+    if (userMxid) clearPendingAck(userMxid);
+  }
+  return newKey.encodedPrivateKey;
 }
 
 // ── Homeserver discovery ──

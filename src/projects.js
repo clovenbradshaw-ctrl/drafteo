@@ -8,9 +8,12 @@
     const grid = el('div.grid');
     const headStats = el('div.stats');
 
+    const recoveryBanner = el('div');
+
     const view = el('div.app',
       titlebar(session, app),
       el('div.projects',
+        recoveryBanner,
         el('div.head',
           el('div',
             el('h2', greeting(session)),
@@ -29,6 +32,10 @@
     function rebuild() {
       clear(grid);
       clear(headStats);
+      clear(recoveryBanner);
+      if (Store.isRecoveryAckPending()) {
+        recoveryBanner.appendChild(recoveryReminderBanner(() => rebuild()));
+      }
       const ws = Store.listWorkspaces();
       const docCount = ws.reduce((n, w) => n + Store.listDocuments(w.id).length, 0);
       const srcCount = ws.reduce((n, w) => n + Store.listDocuments(w.id).reduce((m, d) => m + Store.listSources(d.id).length, 0), 0);
@@ -58,6 +65,7 @@
       if (!document.contains(view)) {
         window.removeEventListener('drafteo:rooms-changed', _refresh);
         window.removeEventListener('drafteo:crypto-checked', _refresh);
+        window.removeEventListener('drafteo:recovery-ack', _refresh);
         return;
       }
       // Re-render the titlebar in place so the E2EE chip reflects the
@@ -71,6 +79,7 @@
     };
     window.addEventListener('drafteo:rooms-changed', _refresh);
     window.addEventListener('drafteo:crypto-checked', _refresh);
+    window.addEventListener('drafteo:recovery-ack', _refresh);
   }
 
   function titlebar(session, app) {
@@ -80,8 +89,12 @@
         el('span.current', 'Workspaces'),
       ),
       el('div.spacer'),
-      el('div.statusdot.saved',
-        { title: e2eeTitle() },
+      el('div.statusdot.saved' + (Store.isRecoveryAckPending() ? ' attn' : ''),
+        {
+          title: e2eeTitle() + ' · Click for backup health',
+          style: { cursor: 'pointer' },
+          onClick: () => openSecurityPanel(),
+        },
         el('span.dot'),
         el('span', e2eeLabel()),
       ),
@@ -90,6 +103,44 @@
         el('span', { style: { maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis' } }, session.matrix_id),
         el('button.ghost', { style: { padding: '1px 6px', fontSize: '10px', marginLeft: '6px' }, onClick: () => app.logout() }, 'LOGOUT'),
       ),
+    );
+  }
+
+  function openSecurityPanel() {
+    if (window.RecoveryUI && window.RecoveryUI.panel) {
+      window.RecoveryUI.panel();
+    }
+  }
+
+  function recoveryReminderBanner(onChange) {
+    const dismissBtn = el('button.ghost', {
+      style: { padding: '4px 10px', fontSize: '11px' },
+      onClick: () => { Store.acknowledgeRecoveryKey(); onChange(); },
+    }, "I've saved it");
+    const detailsBtn = el('button.primary', {
+      style: { padding: '4px 10px', fontSize: '11px' },
+      onClick: () => openSecurityPanel(),
+    }, 'Show details');
+    return el('div', {
+      style: {
+        border: '1px solid var(--warn)',
+        background: 'rgba(199,144,66,0.08)',
+        padding: '10px 14px',
+        marginBottom: '16px',
+        borderRadius: '4px',
+        display: 'flex', gap: '12px', alignItems: 'center',
+        fontFamily: 'var(--sans)', fontSize: '13px', color: 'var(--ink)',
+        lineHeight: '1.5',
+      },
+    },
+      el('div', { style: { flex: 1 } },
+        el('b', 'Save your recovery key.'),
+        ' Without it, clearing your browser cache loses access to encrypted history forever. ',
+        el('span', { style: { color: 'var(--ink-dim)' } },
+          'Open the recovery panel from the E2EE pill to view backup status or reset the key.'),
+      ),
+      detailsBtn,
+      dismissBtn,
     );
   }
 
