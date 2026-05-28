@@ -6,7 +6,6 @@
  */
 
 import * as sdk from 'matrix-js-sdk';
-import { decodeRecoveryKey } from 'matrix-js-sdk/lib/crypto-api/index.js';
 
 let client = null;
 
@@ -18,15 +17,10 @@ export function setProgress(fn) {
   progress = (msg) => { console.log('[matrix]', msg); fn(msg); };
 }
 
-// UI callbacks for the recovery key flow. The UI registers these before
-// login so the client layer can request the key from the user (on a new
-// device) or hand back a newly-generated key for them to save.
-let recoveryKeyProvider = null; // async () => string (the user's recovery key)
+// UI callback invoked with a freshly generated recovery key so the user
+// can save it. We never prompt the user for an existing key — new
+// devices auto-rotate (see ensureEncryptionSetUp) rather than ask.
 let recoveryKeyDisplayer = null; // async (string) => void (show + acknowledge)
-
-export function setRecoveryKeyProvider(fn) {
-  recoveryKeyProvider = fn;
-}
 
 export function setRecoveryKeyDisplayer(fn) {
   recoveryKeyDisplayer = fn;
@@ -150,31 +144,12 @@ function withTimeout(promise, ms, label) {
 
 // ── Crypto callbacks ──
 
-// Cryptocallback bridging the SDK's secret-storage requests to the UI.
-// The SDK calls this whenever it needs to unlock secret storage (e.g. on
-// a new device that has cross-signing on the server but no local keys).
-// We ask the UI for the user's recovery key string, decode it, and hand
-// back [keyId, privateKey] for the first key the SDK lists.
-async function getSecretStorageKey({ keys }) {
-  if (!recoveryKeyProvider) {
-    progress('Recovery key required but no UI provider registered');
-    return null;
-  }
-  const keyId = Object.keys(keys)[0];
-  if (!keyId) return null;
-
-  // The provider may resolve to null/empty if the user cancels — surface
-  // that as "no key" rather than throwing inside the SDK.
-  const encoded = await recoveryKeyProvider();
-  if (!encoded) return null;
-
-  try {
-    const privateKey = decodeRecoveryKey(encoded.trim());
-    return [keyId, privateKey];
-  } catch (e) {
-    progress(`Recovery key invalid: ${e.message}`);
-    return null;
-  }
+// The SDK calls this whenever it needs to unlock secret storage. We
+// don't have the user's prior recovery key on hand (new devices rotate
+// rather than prompt), so always report "no key" — the SDK then
+// gracefully falls back to whatever it can do without secret restore.
+async function getSecretStorageKey() {
+  return null;
 }
 
 // ── Encryption bootstrap ──
@@ -200,57 +175,45 @@ export function acknowledgeRecoveryKey(userMxid) {
   clearPendingAck(userMxid);
 }
 
-// Make sure cross-signing, secret storage, and key backup are all set up
-// for this account. Called after sync on first login (when we still have
-// the password for the UIA challenge cross-signing key upload requires).
-// On a new device with an existing account, this restores from secret
-// storage using the user's recovery key.
+// Make sure cross-signing, secret storage, and key backup are set up for
+// this account on this device. Called after sync on first login (when we
+// still have the password for the UIA challenge cross-signing key upload
+// requires).
+//
+// We never prompt the user for their prior recovery key. If the account
+// already has cross-signing on the server but this device doesn't have
+// the local secrets, we mint a fresh recovery key and reset 4S + key
+// backup under it. Prior encrypted history stays unreadable on this
+// device, but login isn't blocked by a prompt the user can't answer.
 async function ensureEncryptionSetUp({ userMxid, password }) {
   const crypto = client.getCrypto();
   if (!crypto) return;
 
   if (await crypto.isCrossSigningReady()) {
-    // Local cross-signing is already populated. Make sure backup is on.
     try { await crypto.checkKeyBackupAndEnable(); } catch (e) {
       progress(`Key backup check failed: ${e.message}`);
     }
     return;
   }
 
-  const accountHasCrossSigning = await crypto.userHasCrossSigningKeys(userMxid, true);
-
-  if (accountHasCrossSigning) {
-    // New device on an existing account. Need the user's recovery key to
-    // unlock secret storage; bootstrapCrossSigning will call our
-    // getSecretStorageKey callback to fetch the private keys.
-    progress('Restoring encryption keys from recovery…');
-    await crypto.bootstrapCrossSigning({});
-    try { await crypto.loadSessionBackupPrivateKeyFromSecretStorage(); } catch (e) {
-      progress(`Could not load backup key: ${e.message}`);
-    }
-    try {
-      await crypto.restoreKeyBackup();
-    } catch (e) {
-      progress(`Key backup restore failed: ${e.message}`);
-    }
-    try { await crypto.checkKeyBackupAndEnable(); } catch {}
-    // Successful restore implies the user has — and used — their key.
-    clearPendingAck(userMxid);
-    return;
-  }
-
-  // First-time setup for this account. Requires the password for the UIA
-  // challenge on /keys/device_signing/upload.
+  // Bootstrapping (or rotating) needs the password for UIA on
+  // /keys/device_signing/upload, so session restore (which has no
+  // password) just bails until the next interactive login.
   if (!password) {
     progress('Skipping encryption setup: no password available (login again to enable history backup)');
     return;
   }
 
-  progress('Setting up encryption + recovery key…');
+  const accountHasCrossSigning = await crypto.userHasCrossSigningKeys(userMxid, true);
+  progress(accountHasCrossSigning
+    ? 'Resetting encryption + recovery key for this device…'
+    : 'Setting up encryption + recovery key…');
+
   const localUser = userMxid.replace(/^@/, '').split(':')[0];
   const generatedKey = await crypto.createRecoveryKeyFromPassphrase();
 
   await crypto.bootstrapCrossSigning({
+    setupNewCrossSigning: accountHasCrossSigning,
     authUploadDeviceSigningKeys: async (makeRequest) => {
       await makeRequest({
         type: 'm.login.password',

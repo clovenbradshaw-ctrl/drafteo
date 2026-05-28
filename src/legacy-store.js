@@ -30,7 +30,6 @@ import {
   getClient,
   setProgress,
   setRecoveryKeyDisplayer,
-  setRecoveryKeyProvider,
   getEncryptionStatus as fGetEncryptionStatus,
   rotateRecoveryKey as fRotateRecoveryKey,
   isRecoveryAckPending as fIsRecoveryAckPending,
@@ -84,17 +83,6 @@ function installRecoveryHooks() {
         );
       } catch (_) {}
       resolve();
-    });
-  });
-  setRecoveryKeyProvider(() => {
-    if (typeof window !== 'undefined' && window.RecoveryUI?.ask) {
-      return window.RecoveryUI.ask();
-    }
-    return new Promise((resolve) => {
-      const v = (typeof prompt === 'function')
-        ? prompt('This device is new. Paste your recovery key from first login (or cancel to skip):', '')
-        : null;
-      resolve(v ? v.trim() : null);
     });
   });
   setProgress(() => {}); // could surface this in UI later
