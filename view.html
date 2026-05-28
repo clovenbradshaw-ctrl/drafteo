@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<title>Cited source · DraftEO</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  html, body { margin: 0; padding: 0; min-height: 100vh; }
+  body {
+    background: #0f1014; color: #e5e7eb;
+    font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+  }
+  .view {
+    max-width: 980px; margin: 0 auto;
+    padding: 18px 24px 60px;
+    display: flex; flex-direction: column; gap: 18px;
+  }
+  .view-bar {
+    display: flex; align-items: center; gap: 12px;
+    padding-bottom: 14px; border-bottom: 1px solid #2a2d36;
+    flex-wrap: wrap;
+  }
+  .view-logo {
+    font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+    font-size: 12px; letter-spacing: 0.14em; color: #94a3b8;
+    text-decoration: none; padding: 6px 10px;
+    border: 1px solid #2a2d36; border-radius: 4px; white-space: nowrap;
+  }
+  .view-logo:hover { color: #e5e7eb; border-color: #475569; }
+  .view-id {
+    flex: 1; min-width: 0;
+    font-size: 12px; color: #94a3b8;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .view-id strong { color: #e5e7eb; font-weight: 600; }
+  .view-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .view-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+    font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 8px 12px; border: 1px solid #2a2d36; border-radius: 4px;
+    background: #14161c; color: #e5e7eb; cursor: pointer; text-decoration: none;
+  }
+  .view-btn:hover { border-color: #475569; background: #1e2128; }
+  .view-btn.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+  .view-btn.primary:hover { background: #1d4ed8; border-color: #1d4ed8; }
+  .view-head {
+    display: flex; align-items: center; gap: 10px;
+    font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+    font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: #64748b;
+  }
+  .view-head .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #22c55e; display: inline-block;
+  }
+  .view-head.warn .dot { background: #f97316; }
+  .view-head.err .dot { background: #ef4444; }
+  .view-frame {
+    width: 100%; height: 78vh; min-height: 540px;
+    border: 0; border-radius: 6px; background: #fff;
+  }
+  .view-img-wrap {
+    background: #fff; border-radius: 6px; padding: 20px;
+    display: flex; justify-content: center;
+  }
+  .view-img-wrap img { max-width: 100%; height: auto; }
+  .view-fallback {
+    padding: 28px; background: #14161c;
+    border: 1px dashed #2a2d36; border-radius: 6px;
+    text-align: center; color: #cbd5e1;
+  }
+  .view-fallback h3 { margin: 0 0 8px; font-size: 16px; color: #f8fafc; }
+  .view-fallback p { margin: 0 0 16px; font-size: 13px; line-height: 1.55; }
+  .view-foot {
+    margin-top: 16px; padding-top: 16px;
+    border-top: 1px solid #2a2d36;
+    font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+    font-size: 11px; color: #64748b; text-align: center;
+  }
+  .view-foot a { color: #94a3b8; }
+  .view-toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    background: #0f172a; color: #f8fafc;
+    padding: 10px 18px; border-radius: 4px;
+    font-family: ui-monospace, monospace;
+    font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase;
+    z-index: 9999; box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+  }
+  @media (prefers-color-scheme: light) {
+    body { background: #f8fafc; color: #0f172a; }
+    .view-bar { border-bottom-color: #e2e8f0; }
+    .view-logo { border-color: #e2e8f0; color: #475569; }
+    .view-logo:hover { border-color: #94a3b8; color: #0f172a; }
+    .view-id { color: #475569; }
+    .view-id strong { color: #0f172a; }
+    .view-btn { background: #fff; border-color: #e2e8f0; color: #0f172a; }
+    .view-btn:hover { border-color: #94a3b8; background: #f1f5f9; }
+    .view-fallback { background: #fff; border-color: #e2e8f0; color: #334155; }
+    .view-fallback h3 { color: #0f172a; }
+    .view-foot { border-top-color: #e2e8f0; color: #64748b; }
+    .view-foot a { color: #334155; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+(function () {
+  function parseHash() {
+    const raw = (location.hash || '').replace(/^#/, '');
+    if (!raw) return {};
+    const out = {};
+    for (const pair of raw.split('&')) {
+      if (!pair) continue;
+      const eq = pair.indexOf('=');
+      const k = eq < 0 ? pair : pair.slice(0, eq);
+      const v = eq < 0 ? '' : pair.slice(eq + 1);
+      try { out[decodeURIComponent(k)] = decodeURIComponent(v.replace(/\+/g, '%20')); }
+      catch (_) { out[k] = v; }
+    }
+    return out;
+  }
+
+  function el(tag, attrs, ...kids) {
+    const node = document.createElement(tag);
+    if (attrs) {
+      for (const k of Object.keys(attrs)) {
+        const v = attrs[k];
+        if (v == null || v === false) continue;
+        if (k === 'class') node.className = v;
+        else if (k === 'style' && typeof v === 'object') Object.assign(node.style, v);
+        else if (k.startsWith('on') && typeof v === 'function')
+          node.addEventListener(k.slice(2).toLowerCase(), v);
+        else node.setAttribute(k, v);
+      }
+    }
+    for (const kid of kids.flat(Infinity)) {
+      if (kid == null || kid === false) continue;
+      node.appendChild(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+    }
+    return node;
+  }
+
+  function inferType(file, type) {
+    const t = (type || '').toLowerCase();
+    if (t.includes('/')) return t;
+    if (t === 'pdf') return 'application/pdf';
+    if (t === 'html' || t === 'htm') return 'text/html';
+    if (t === 'jpg' || t === 'jpeg') return 'image/jpeg';
+    if (t === 'png') return 'image/png';
+    if (t === 'gif') return 'image/gif';
+    if (t === 'webp') return 'image/webp';
+    if (t === 'mp3') return 'audio/mpeg';
+    if (t === 'mp4') return 'video/mp4';
+    if (t === 'webm') return 'video/webm';
+    if (t === 'txt' || t === 'md') return 'text/plain';
+    const f = (file || '').toLowerCase();
+    if (/\.pdf$/.test(f)) return 'application/pdf';
+    if (/\.html?$/.test(f)) return 'text/html';
+    if (/\.(jpe?g)$/.test(f)) return 'image/jpeg';
+    if (/\.png$/.test(f)) return 'image/png';
+    if (/\.gif$/.test(f)) return 'image/gif';
+    if (/\.webp$/.test(f)) return 'image/webp';
+    if (/\.mp3$/.test(f)) return 'audio/mpeg';
+    if (/\.mp4$/.test(f)) return 'video/mp4';
+    if (/\.webm$/.test(f)) return 'video/webm';
+    if (/\.txt$/.test(f)) return 'text/plain';
+    return '';
+  }
+
+  function flashToast(msg) {
+    const t = el('div', { class: 'view-toast' }, msg);
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 2200);
+  }
+
+  function copyShareUrl() {
+    const url = location.href;
+    const fallback = () => {
+      const ta = document.createElement('textarea');
+      ta.value = url;
+      ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch (_) {}
+      ta.remove();
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).catch(fallback);
+    } else fallback();
+    flashToast('Link copied');
+  }
+
+  function renderEmpty(root, headline, sub) {
+    root.appendChild(el('div', { class: 'view' },
+      el('div', { class: 'view-bar' },
+        el('a', { class: 'view-logo', href: '.' }, '◆ DraftEO'),
+        el('div', { class: 'view-id' }, 'Cited source'),
+      ),
+      el('div', { class: 'view-fallback' },
+        el('h3', null, headline),
+        el('p', null, sub),
+      ),
+    ));
+  }
+
+  function render() {
+    const root = document.getElementById('root');
+    while (root.firstChild) root.removeChild(root.firstChild);
+
+    const params = parseHash();
+    const src = params.src || '';
+    const file = params.file || '';
+    const mime = inferType(file, params.type);
+
+    if (!src || !file) {
+      renderEmpty(root,
+        'Missing source identifier',
+        'This link is incomplete — it needs a source and a filename.');
+      return;
+    }
+
+    const downloadUrl = 'https://archive.org/download/' + src + '/' + encodeURIComponent(file);
+    const detailsUrl = 'https://archive.org/details/' + src;
+
+    document.title = file + ' · DraftEO';
+
+    const isPdf = mime === 'application/pdf';
+    const isImage = mime.startsWith('image/');
+    const isMedia = mime.startsWith('video/') || mime.startsWith('audio/');
+
+    const head = el('div', { class: 'view-head' },
+      el('span', { class: 'dot' }),
+      el('span', null,
+        isPdf ? 'Archived PDF'
+        : isImage ? 'Archived image'
+        : isMedia ? 'Archived media'
+        : 'Archived file'),
+    );
+
+    let body;
+    if (isImage) {
+      body = el('div', { class: 'view-img-wrap' },
+        el('img', { src: downloadUrl, alt: file }));
+    } else if (mime.startsWith('audio/')) {
+      body = el('div', { class: 'view-img-wrap' },
+        el('audio', { src: downloadUrl, controls: 'controls' }));
+    } else if (mime.startsWith('video/')) {
+      body = el('div', { class: 'view-img-wrap' },
+        el('video', { src: downloadUrl, controls: 'controls', style: 'max-width:100%' }));
+    } else {
+      body = el('iframe', {
+        class: 'view-frame',
+        src: downloadUrl,
+        referrerpolicy: 'no-referrer',
+      });
+    }
+
+    root.appendChild(el('div', { class: 'view' },
+      el('div', { class: 'view-bar' },
+        el('a', { class: 'view-logo', href: '.', title: 'Open DraftEO' }, '◆ DraftEO'),
+        el('div', { class: 'view-id' }, 'Cited source · ', el('strong', null, file)),
+        el('div', { class: 'view-actions' },
+          el('a', { class: 'view-btn', href: detailsUrl, target: '_blank', rel: 'noopener' }, '↗ archive.org'),
+          el('a', { class: 'view-btn', href: downloadUrl, target: '_blank', rel: 'noopener', download: file }, '⬇ Download'),
+          el('button', { class: 'view-btn primary', onclick: copyShareUrl }, '⧉ Copy link'),
+        ),
+      ),
+      head,
+      body,
+      el('div', { class: 'view-foot' },
+        'Permanently preserved on ',
+        el('a', { href: detailsUrl, target: '_blank', rel: 'noopener' }, 'archive.org'),
+        '.',
+      ),
+    ));
+  }
+
+  window.addEventListener('hashchange', render);
+  render();
+})();
+</script>
+</body>
+</html>

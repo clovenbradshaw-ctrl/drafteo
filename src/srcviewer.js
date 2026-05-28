@@ -177,6 +177,28 @@
             }
           }, icon('copy', 12)),
         ));
+
+        // Shareable mini-site link — opens view.html with the archive.org
+        // identifier, filename, and mime so anyone with the link can
+        // see the source inline.
+        const archiveFile = s.archive_org_filename || s.filename || '';
+        if (s.archive_org_identifier && archiveFile) {
+          const base = location.origin + location.pathname.replace(/[^/]*$/, '');
+          const shareUrl = base + 'view.html#src=' + encodeURIComponent(s.archive_org_identifier)
+            + '&file=' + encodeURIComponent(archiveFile)
+            + '&type=' + encodeURIComponent(s.mime || '');
+          head.appendChild(el('div.srcv-archive-row',
+            el('span.srcv-archive-label', 'Shareable mini page'),
+            el('a.srcv-archive-url', { href: shareUrl, target: '_blank', rel: 'noopener' }, shareUrl),
+            el('button.srcv-copy', {
+              title: 'Copy mini-page link',
+              onClick: (e) => {
+                e.preventDefault();
+                navigator.clipboard.writeText(shareUrl).then(() => DOM.toast('COPIED', shareUrl));
+              }
+            }, icon('copy', 12)),
+          ));
+        }
       }
 
       return head;
