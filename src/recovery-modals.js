@@ -68,15 +68,16 @@
 
       modalRef = el('div.modal',
         { style: { width: 'min(560px, 96vw)', borderColor: 'var(--accent-soft)' } },
-        el('div.m-head', el('div', el('div.ttl', 'Save your recovery key'))),
+        el('div.m-head', el('div', el('div.ttl', 'Optional recovery key'))),
         el('div.m-body',
           el('div', {
             style: { fontFamily: 'var(--sans)', fontSize: '13px',
                      color: 'var(--ink-dim)', lineHeight: '1.7', marginBottom: '14px' },
           },
-            'This key restores your message history on new browsers and devices. ',
-            'Save it in a password manager or somewhere offline — ',
-            el('b', 'it cannot be shown again'), '.',
+            el('b', 'Your password already restores your data'),
+            ' on a new browser or after clearing site data. ',
+            'This recovery key is an optional second way in — keep it somewhere safe if you want a spare. ',
+            'It ', el('b', 'cannot be shown again'), ', but you can mint a new one anytime.',
           ),
           keyBox,
         ),
@@ -223,30 +224,36 @@
           },
         },
           'Your data lives in end-to-end encrypted Matrix rooms. ',
-          'A ',
-          el('b', 'recovery key'),
-          ' is what restores your drafts and history on a new browser or after clearing site data. ',
-          'Without it, a cache wipe means historical messages stay encrypted forever.',
+          'When ',
+          el('b', 'password recovery'),
+          ' is on, signing in with your password restores your drafts and history on a new browser or after clearing site data. ',
+          'The recovery key is an optional second way in.',
         );
         body.appendChild(intro);
 
         if (status.recoveryAckPending) {
           body.appendChild(el('div', {
             style: {
-              border: '1px solid var(--warn)', background: 'rgba(199,144,66,0.08)',
+              border: '1px solid var(--border)', background: 'var(--chrome)',
               padding: '10px 12px', borderRadius: '4px', marginBottom: '12px',
-              fontFamily: 'var(--sans)', fontSize: '12px', color: 'var(--warn)',
+              fontFamily: 'var(--sans)', fontSize: '12px', color: 'var(--ink-dim)',
               lineHeight: '1.6',
             },
           },
-            el('b', "Save your recovery key. "),
-            'You generated one on first login but never confirmed it was saved. ',
-            'If you can\'t find it, click ',
+            el('b', "Optional: save your recovery key. "),
+            'You generated one on first login but never confirmed it. ',
+            'Your password already restores your data, so this is just a spare. ',
+            'Lost it? Click ',
             el('b', 'Reset recovery key'),
-            ' below to mint a new one.',
+            ' to mint a new one.',
           ));
         }
 
+        body.appendChild(statusRow(
+          'Password recovery',
+          status.passwordRecovery == null ? '—' : (status.passwordRecovery ? 'On' : 'Key only'),
+          status.passwordRecovery == null ? 'muted' : (status.passwordRecovery ? 'ok' : 'warn'),
+        ));
         body.appendChild(statusRow(
           'Cross-signing',
           status.crossSigningReady ? 'Ready' : 'Not ready',

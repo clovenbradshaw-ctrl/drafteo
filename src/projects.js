@@ -123,8 +123,8 @@
     }, 'Show details');
     return el('div', {
       style: {
-        border: '1px solid var(--warn)',
-        background: 'rgba(199,144,66,0.08)',
+        border: '1px solid var(--border)',
+        background: 'var(--chrome)',
         padding: '10px 14px',
         marginBottom: '16px',
         borderRadius: '4px',
@@ -134,8 +134,8 @@
       },
     },
       el('div', { style: { flex: 1 } },
-        el('b', 'Save your recovery key.'),
-        ' Without it, clearing your browser cache loses access to encrypted history forever. ',
+        el('b', 'Optional: save your recovery key.'),
+        ' Signing in with your password already restores your history after clearing your cache — this key is just a spare. ',
         el('span', { style: { color: 'var(--ink-dim)' } },
           'Open the recovery panel from the E2EE pill to view backup status or reset the key.'),
       ),

@@ -6,9 +6,24 @@
  */
 
 import * as sdk from 'matrix-js-sdk';
-import { decodeRecoveryKey } from 'matrix-js-sdk/lib/crypto-api/index.js';
+import { decodeRecoveryKey, deriveRecoveryKeyFromPassphrase } from 'matrix-js-sdk/lib/crypto-api/index.js';
 
 let client = null;
+
+// The password the user logged in with, held in memory for the lifetime of
+// this tab so the SDK's getSecretStorageKey callback can re-derive the
+// secret-storage key on a fresh device or after a local wipe. This is what
+// makes data recoverable from the password alone — no separately-saved
+// recovery key required.
+//
+// SECURITY NOTE: This is a deliberate trade-off. Binding secret storage to
+// the account password means the end-to-end backup's secrecy reduces to the
+// strength of that password (a malicious/compromised homeserver could try an
+// offline brute-force against the stored secrets using the public salt +
+// iterations). We accept this in exchange for guaranteed recoverability after
+// a local wipe. The password is NEVER written to disk — only kept in this JS
+// variable for the session and cleared on logout.
+let sessionPassword = null;
 
 // Optional progress reporter — main.js can set this to surface step progress
 // to the user instead of leaving them staring at "Logging in…".
@@ -153,16 +168,40 @@ function withTimeout(promise, ms, label) {
 // Cryptocallback bridging the SDK's secret-storage requests to the UI.
 // The SDK calls this whenever it needs to unlock secret storage (e.g. on
 // a new device that has cross-signing on the server but no local keys).
-// We ask the UI for the user's recovery key string, decode it, and hand
-// back [keyId, privateKey] for the first key the SDK lists.
+//
+// Two ways to produce the key, in order of preference:
+//   1. Derive it from the password the user just logged in with. This is
+//      the path that lets a wiped / brand-new device restore everything
+//      automatically, with no separately-saved recovery key. Only works
+//      when secret storage was set up with a passphrase (all new accounts,
+//      and legacy accounts after the one-time upgrade below).
+//   2. Ask the UI for the user's recovery key string and decode it. Used
+//      for legacy random-key accounts, or restore-only sessions where we
+//      don't hold the password.
 async function getSecretStorageKey({ keys }) {
+  const keyId = Object.keys(keys)[0];
+  if (!keyId) return null;
+  const info = keys[keyId];
+
+  // 1) Password-derived unlock (preferred — survives a local wipe).
+  const pp = info && info.passphrase;
+  if (sessionPassword && pp && pp.salt && pp.iterations) {
+    try {
+      const privateKey = await deriveRecoveryKeyFromPassphrase(
+        sessionPassword, pp.salt, pp.iterations
+      );
+      return [keyId, privateKey];
+    } catch (e) {
+      progress(`Password-based unlock failed: ${e.message}`);
+      // Fall through to the recovery-key prompt below.
+    }
+  }
+
+  // 2) Recovery-key paste fallback.
   if (!recoveryKeyProvider) {
     progress('Recovery key required but no UI provider registered');
     return null;
   }
-  const keyId = Object.keys(keys)[0];
-  if (!keyId) return null;
-
   // The provider may resolve to null/empty if the user cancels — surface
   // that as "no key" rather than throwing inside the SDK.
   const encoded = await recoveryKeyProvider();
@@ -175,6 +214,68 @@ async function getSecretStorageKey({ keys }) {
     progress(`Recovery key invalid: ${e.message}`);
     return null;
   }
+}
+
+// True when the account's default secret-storage key is derived from a
+// passphrase (i.e. unlockable with the login password). False for legacy
+// random-recovery-key accounts. Best-effort — returns false on any error.
+async function defaultKeyIsPassphraseBased() {
+  try {
+    if (!client || !client.secretStorage) return false;
+    const tuple = await client.secretStorage.getKey(); // default key
+    const desc = tuple && tuple[1];
+    return !!(desc && desc.passphrase && desc.passphrase.salt && desc.passphrase.iterations);
+  } catch (_) {
+    return false;
+  }
+}
+
+// Re-wrap secret storage (and the key backup decryption key it holds) under
+// a key derived from the current session password. This is the one-time
+// upgrade that makes a legacy random-recovery-key account recoverable from
+// the password alone after a local wipe. No-op when we don't hold the
+// password or secret storage is already passphrase-based.
+//
+// SAFETY: replacing secret storage retires the old random recovery key. We
+// must guarantee the existing key backup's decryption key gets carried into
+// the new secret storage first — otherwise we'd retire the only key that can
+// reach the backup and make history UNRECOVERABLE. The SDK only re-stores the
+// backup key when it's cached locally (rust-crypto `saveBackupKeyToStorage`),
+// so when a backup exists we proceed only if that key is already cached. If
+// it isn't, we defer (leaving the existing recovery key working) rather than
+// risk orphaning the backup. The explicit "Reset recovery key" action
+// (rotateRecoveryKey) is the path for those devices.
+async function upgradeToPassphraseRecovery(crypto, userMxid) {
+  if (!sessionPassword) return;
+  if (await defaultKeyIsPassphraseBased()) return; // already password-recoverable
+
+  let backupVersion = null;
+  try { backupVersion = await crypto.getActiveSessionBackupVersion(); } catch (_) {}
+
+  if (backupVersion) {
+    // Only safe to re-key secret storage if we can carry the backup key over.
+    let cachedBackupKey = null;
+    try { cachedBackupKey = await crypto.getSessionBackupPrivateKey(); } catch (_) {}
+    if (!cachedBackupKey) {
+      progress('Recovery upgrade deferred: backup key not available on this device');
+      return;
+    }
+  }
+
+  progress('Upgrading recovery so your password restores data after a wipe…');
+  const key = await crypto.createRecoveryKeyFromPassphrase(sessionPassword);
+  // Keep the existing backup if one is active (its cached key is re-stored
+  // under the new passphrase key); only mint a new backup when there is none.
+  // setupNewSecretStorage also re-stores the cross-signing keys.
+  await crypto.bootstrapSecretStorage({
+    createSecretStorageKey: async () => key,
+    setupNewKeyBackup: !backupVersion,
+    setupNewSecretStorage: true,
+  });
+  try { await crypto.checkKeyBackupAndEnable(); } catch {}
+  // The password now recovers everything — no separate key to nag about.
+  if (userMxid) clearPendingAck(userMxid);
+  progress('Recovery upgraded — your password now restores data after a wipe');
 }
 
 // ── Encryption bootstrap ──
@@ -203,8 +304,10 @@ export function acknowledgeRecoveryKey(userMxid) {
 // Make sure cross-signing, secret storage, and key backup are all set up
 // for this account. Called after sync on first login (when we still have
 // the password for the UIA challenge cross-signing key upload requires).
-// On a new device with an existing account, this restores from secret
-// storage using the user's recovery key.
+// On a new device / after a local wipe, this restores from secret storage —
+// preferring to derive the secret-storage key from the login password, so
+// the user gets their history back with just username + password and no
+// separately-saved recovery key.
 async function ensureEncryptionSetUp({ userMxid, password }) {
   const crypto = client.getCrypto();
   if (!crypto) return;
@@ -214,16 +317,24 @@ async function ensureEncryptionSetUp({ userMxid, password }) {
     try { await crypto.checkKeyBackupAndEnable(); } catch (e) {
       progress(`Key backup check failed: ${e.message}`);
     }
+    // If this is a legacy random-recovery-key account, upgrade it now (we
+    // hold the password and the device is already trusted) so a future
+    // local wipe is recoverable from the password.
+    if (sessionPassword) {
+      try { await upgradeToPassphraseRecovery(crypto, userMxid); }
+      catch (e) { progress(`Recovery upgrade skipped: ${e.message}`); }
+    }
     return;
   }
 
   const accountHasCrossSigning = await crypto.userHasCrossSigningKeys(userMxid, true);
 
   if (accountHasCrossSigning) {
-    // New device on an existing account. Need the user's recovery key to
-    // unlock secret storage; bootstrapCrossSigning will call our
-    // getSecretStorageKey callback to fetch the private keys.
-    progress('Restoring encryption keys from recovery…');
+    // New device / post-wipe on an existing account. Need the secret-storage
+    // key to unlock; bootstrapCrossSigning calls our getSecretStorageKey
+    // callback, which derives it from the login password (or, for legacy
+    // random-key accounts, prompts for the pasted recovery key).
+    progress('Restoring encryption keys…');
     await crypto.bootstrapCrossSigning({});
     try { await crypto.loadSessionBackupPrivateKeyFromSecretStorage(); } catch (e) {
       progress(`Could not load backup key: ${e.message}`);
@@ -236,6 +347,15 @@ async function ensureEncryptionSetUp({ userMxid, password }) {
     try { await crypto.checkKeyBackupAndEnable(); } catch {}
     // Successful restore implies the user has — and used — their key.
     clearPendingAck(userMxid);
+    // Now that we're unlocked, upgrade a legacy random-key account to
+    // password-based recovery so the next wipe needs only the password.
+    if (sessionPassword) {
+      try {
+        if (await crypto.isCrossSigningReady()) {
+          await upgradeToPassphraseRecovery(crypto, userMxid);
+        }
+      } catch (e) { progress(`Recovery upgrade skipped: ${e.message}`); }
+    }
     return;
   }
 
@@ -246,9 +366,11 @@ async function ensureEncryptionSetUp({ userMxid, password }) {
     return;
   }
 
-  progress('Setting up encryption + recovery key…');
+  progress('Setting up encryption + password recovery…');
   const localUser = userMxid.replace(/^@/, '').split(':')[0];
-  const generatedKey = await crypto.createRecoveryKeyFromPassphrase();
+  // Derive the secret-storage key from the password so the account is
+  // recoverable from the password alone after a local wipe.
+  const generatedKey = await crypto.createRecoveryKeyFromPassphrase(password);
 
   await crypto.bootstrapCrossSigning({
     authUploadDeviceSigningKeys: async (makeRequest) => {
@@ -268,8 +390,10 @@ async function ensureEncryptionSetUp({ userMxid, password }) {
 
   try { await crypto.checkKeyBackupAndEnable(); } catch {}
 
-  // Mark pending BEFORE the displayer so a reload mid-modal still
-  // surfaces the reminder banner on next visit.
+  // Reveal the recovery key once as an OPTIONAL offline backup. Data is
+  // already recoverable from the password, so this is no longer mandatory —
+  // dismissing it does not put history at risk. We still mark it pending
+  // before the displayer so a reload mid-modal can re-surface the key.
   markPendingAck(userMxid);
   if (recoveryKeyDisplayer && generatedKey.encodedPrivateKey) {
     await recoveryKeyDisplayer(generatedKey.encodedPrivateKey);
@@ -317,6 +441,12 @@ export async function getEncryptionStatus() {
   try { sessionBackupKey = await crypto.getSessionBackupPrivateKey(); }
   catch (_) {}
 
+  // Whether the account can be recovered with just the login password
+  // (passphrase-based secret storage) vs. only a separately-saved key.
+  let passwordRecovery = null;
+  try { passwordRecovery = await defaultKeyIsPassphraseBased(); }
+  catch (_) {}
+
   let deviceTrusted = null;
   if (userMxid && deviceId) {
     try {
@@ -337,6 +467,7 @@ export async function getEncryptionStatus() {
     backupAlgorithm: backupInfo?.algorithm || null,
     backupCount: backupInfo?.count ?? null,
     backupKeyCached: !!sessionBackupKey,
+    passwordRecovery,
     deviceTrusted,
     recoveryAckPending: userMxid ? isRecoveryAckPending(userMxid) : false,
   };
@@ -360,7 +491,10 @@ export async function rotateRecoveryKey() {
   const userMxid = client.getUserId();
   progress('Rotating recovery key…');
 
-  const newKey = await crypto.createRecoveryKeyFromPassphrase();
+  // Re-derive from the session password when we have it, so the rotated
+  // key stays password-recoverable after a wipe. Falls back to a random
+  // key only on a restore-only session that never saw the password.
+  const newKey = await crypto.createRecoveryKeyFromPassphrase(sessionPassword || undefined);
   await crypto.bootstrapSecretStorage({
     createSecretStorageKey: async () => newKey,
     setupNewKeyBackup: true,
@@ -409,6 +543,10 @@ async function discoverBaseUrl(rawHs, mxid) {
 
 export async function login(homeserver, username, password) {
   const user = username.replace(/^@/, '').split(':')[0];
+
+  // Hold the password in memory for the session so secret storage can be
+  // derived/unlocked from it (see sessionPassword note at top of file).
+  sessionPassword = password;
 
   progress('Resolving homeserver…');
   const baseUrl = await discoverBaseUrl(homeserver, username);
@@ -464,6 +602,7 @@ export async function login(homeserver, username, password) {
   } catch (e) {
     try { await clearCryptoStore(); } catch {}
     localStorage.removeItem('mx_session');
+    sessionPassword = null;
     client = null;
     throw e;
   }
@@ -571,6 +710,7 @@ export async function logout() {
     }
     client = null;
   }
+  sessionPassword = null;
   localStorage.removeItem('mx_session');
   // Also clear the crypto store so the next login starts clean
   try { await clearCryptoStore(); } catch {}
