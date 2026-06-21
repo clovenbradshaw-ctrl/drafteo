@@ -474,9 +474,17 @@ export async function login(homeserver, username, password) {
   await waitForSync(client);
   progress('Sync ready');
 
-  // Step 6: cross-signing + key backup.
+  // Step 6: cross-signing + key backup. Bounded so a homeserver that
+  // stalls on userHasCrossSigningKeys / bootstrapCrossSigning / key
+  // backup restore can't leave the login button stuck on "CONNECTING…"
+  // forever — the user would otherwise have to wipe site storage by
+  // hand to recover.
   try {
-    await ensureEncryptionSetUp({ userMxid: resp.user_id, password });
+    await withTimeout(
+      ensureEncryptionSetUp({ userMxid: resp.user_id, password }),
+      45000,
+      'Encryption setup'
+    );
   } catch (e) {
     progress(`Encryption setup failed: ${e.message}`);
   }

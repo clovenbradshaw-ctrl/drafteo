@@ -39,12 +39,27 @@
     }
     u.addEventListener('input', syncHomeserverVisibility);
 
+    let stuckTimer = null;
+    function showStuckHint() {
+      resetWrap.style.display = '';
+    }
+    function hideStuckHint() {
+      resetWrap.style.display = 'none';
+      if (stuckTimer) { clearTimeout(stuckTimer); stuckTimer = null; }
+    }
+
     async function doLogin() {
       if (busy) return;
       err.textContent = '';
       busy = true;
       submit.textContent = 'CONNECTING…';
       submit.disabled = true;
+      // If sign-in is still spinning after 20s, surface the reset
+      // escape hatch — most legitimate logins complete well inside
+      // that window, and a longer wait usually means a stale local
+      // store has wedged the SDK.
+      if (stuckTimer) clearTimeout(stuckTimer);
+      stuckTimer = setTimeout(showStuckHint, 20000);
       try {
         // If user provided @name:server, pull the server out of the mxid.
         let user = u.value.trim();
@@ -55,16 +70,43 @@
           homeserver = 'https://' + m[2];
         }
         const session = await Store.login(user, p.value, homeserver);
+        hideStuckHint();
         onLoggedIn(session);
       } catch (e) {
         err.textContent = e.message || String(e);
         submit.textContent = 'SIGN IN';
         submit.disabled = false;
         busy = false;
+        // Leave the reset link visible if it's already showing — a
+        // real error after a long wait is exactly the case where the
+        // user should still have one click to recover.
       }
     }
 
     const submit = el('button.primary', { type: 'submit', onClick: (e) => { e.preventDefault(); doLogin(); } }, 'SIGN IN');
+
+    // Escape hatch for the "stuck on CONNECTING…" failure mode: a stale
+    // crypto store / orphaned session in IndexedDB can wedge the SDK
+    // mid-bootstrap. Store.wipeAll() clears every browser-side store
+    // and reloads. Hidden until login has been spinning long enough
+    // that something has likely gone wrong.
+    const resetLink = el('a', {
+      href: '#',
+      style: { color: 'var(--accent)', textDecoration: 'underline', cursor: 'pointer' },
+      onClick: (e) => {
+        e.preventDefault();
+        if (!confirm('Reset local data and reload?\n\nThis clears the cached session and encryption keys on this device. Your messages on the server are not affected. You will need to sign in again (and enter your recovery key if prompted).')) return;
+        try { window.Store.wipeAll(); }
+        catch (err2) {
+          console.error('[login] wipeAll failed', err2);
+          try { localStorage.clear(); sessionStorage.clear(); } catch (_) {}
+          location.reload();
+        }
+      },
+    }, 'Reset local data');
+    const resetWrap = el('div.reset-hint', {
+      style: { display: 'none', marginTop: '10px', fontSize: '11px', color: 'var(--ink-faint)' },
+    }, 'Sign-in is taking longer than usual. ', resetLink, ' to clear cached encryption state and try again.');
 
     const signupCta = el('a.signup-cta', {
       href: 'https://hyphae.social',
@@ -93,6 +135,7 @@
       hsToggle,
       el('div.actions', submit),
       err,
+      resetWrap,
       el('div.hint',
         'Hyphae is the default homeserver. Already have a Matrix account on another server? ',
         el('a', { href: '#', onClick: (e) => { e.preventDefault(); hsManuallyToggled = true; hWrap.style.display = ''; hsToggle.textContent = 'Use Hyphae (default)'; h.focus(); }, style: { color: 'var(--accent)', textDecoration: 'underline' } }, 'Use it here'),
